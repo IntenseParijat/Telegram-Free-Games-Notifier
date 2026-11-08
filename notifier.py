@@ -276,8 +276,10 @@ async def run_notifier() -> None:
         if str(game.get("is_free", "")).strip().lower() in ("1", "true", "yes"):
             current_games[game_key(game)] = game
 
+    # Use the state file's existence to distinguish initial setup from a later scan.
     first_run = not STATE_PATH.exists()
     seen = load_state()
+
     if first_run and not config.SEND_EXISTING_ON_FIRST_RUN:
         save_state(set(current_games))
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
@@ -285,6 +287,7 @@ async def run_notifier() -> None:
 
     new_games = [(key, game) for key, game in current_games.items() if key not in seen]
     log.info("Fetched %s records; free listings: %s; new listings: %s", len(games), len(current_games), len(new_games))
+
     if not new_games:
         if first_run:
             save_state(set(current_games))
@@ -314,6 +317,7 @@ async def run_notifier() -> None:
                     wait = min(2 ** attempt, 60)
                     log.exception("Failed posting %s (attempt %s/%s); retry in %ss", title, attempt, MAX_RETRIES, wait)
                     await asyncio.sleep(wait)
+
             if sent:
                 seen.add(key)
                 save_state(seen)
