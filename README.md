@@ -160,7 +160,7 @@ A partial scan never initializes a first-run baseline. That prevents the notifie
 
 If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
-The repository keeps an empty `data/seen_games.json` file under version control. Do not delete it unless intentionally resetting duplicate tracking. With `SEND_EXISTING_ON_FIRST_RUN = True`, an empty tracked database is treated as a first run and the current listings are posted. Set it to `False` to silently seed the current catalogue instead.
+The repository keeps `data/seen_games.json` under version control. It currently restores the 100 game IDs from the previous notifier history, so those listings will not be reposted even though `SEND_EXISTING_ON_FIRST_RUN = True`. If you deliberately delete or clear the database, the next complete scan with first-run sending enabled will post all games returned by the API. Set the option to `False` instead to silently seed the current catalogue.
 
 ## Local run
 
