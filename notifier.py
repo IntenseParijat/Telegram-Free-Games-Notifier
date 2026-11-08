@@ -232,8 +232,11 @@ def compose_message(game: dict[str, Any], limit: int) -> str:
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
     title = str(game.get("title") or "Untitled game")
     image_url = valid_http_url(game.get("image_url")) if enabled("image") else None
+
     if image_url:
         caption = compose_message(game, MAX_PHOTO_CAPTION)
+        if visible_text_length(caption) > MAX_PHOTO_CAPTION:
+            raise ValueError(f"Photo caption for {title} exceeds {MAX_PHOTO_CAPTION} characters after trimming")
         try:
             await client.send_file(channel, image_url, caption=caption, parse_mode="html")
             return
@@ -241,6 +244,8 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
             log.warning("Image send failed for %s (%s); falling back to text", title, exc)
 
     message = compose_message(game, MAX_TEXT_MESSAGE)
+    if visible_text_length(message) > MAX_TEXT_MESSAGE:
+        raise ValueError(f"Text message for {title} exceeds Telegram's message limit after trimming")
     await client.send_message(channel, message, parse_mode="html", link_preview=False)
 
 
