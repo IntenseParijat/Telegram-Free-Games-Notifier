@@ -154,13 +154,13 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## API pagination and recovery
 
-The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging. It still processes unique records already returned, so new games on the returned page can be posted, but the run remains failed and clearly reports that the catalogue scan was partial. Games on later pages cannot be detected until FreeGameRadar fixes its pagination behaviour.
+The notifier requests pages of 100 records. It removes duplicate listings across pages and stops with a partial-scan warning if FreeGameRadar repeats a page (including the same records in a different order). Short pages are accepted as a normal final page, while an empty page is also accepted as the end marker. Unique records already returned can still be delivered when a repeated page prevents a full scan.
 
 A partial scan never initializes a first-run baseline. That prevents the notifier from treating the first page as the complete catalogue and permanently suppressing games it could not see. If the database already exists, successfully posted titles are recorded normally; failed Telegram deliveries remain unseen and eligible for the next run.
 
 If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
-The repository keeps `data/seen_games.json` under version control. It currently restores the 100 game IDs from the previous notifier history, so those listings will not be reposted even though `SEND_EXISTING_ON_FIRST_RUN = True`. If you deliberately delete or clear the database, the next complete scan with first-run sending enabled will post all games returned by the API. Set the option to `False` instead to silently seed the current catalogue.
+The repository keeps `data/seen_games.json` under version control. It restores the previous notifier history (90 distinct listing keys), so those listings will not be reposted even though `SEND_EXISTING_ON_FIRST_RUN = True`. If you deliberately delete or clear the database, the next complete scan with first-run sending enabled will post all games returned by the API. Set the option to `False` instead to silently seed the current catalogue.
 
 ## Local run
 
