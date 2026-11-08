@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from telethon import TelegramClient
@@ -59,14 +60,12 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
                 params={"page": page, "limit": PAGE_SIZE},
                 timeout=REQUEST_TIMEOUT,
             )
-
             if response.status_code == 429 or response.status_code >= 500:
                 retry_after = response.headers.get("Retry-After", "")
                 try:
                     wait = min(max(int(retry_after), 1), 120) if retry_after else min(2 ** attempt, 60)
                 except ValueError:
                     wait = min(2 ** attempt, 60)
-
                 if attempt == MAX_RETRIES:
                     response.raise_for_status()
                 log.warning("API returned HTTP %s on page %s; retrying in %ss", response.status_code, page, wait)
@@ -80,7 +79,6 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
             if payload.get("success") is not True or not isinstance(payload.get("data"), list):
                 raise RuntimeError(f"Unexpected API response on page {page}: success/data fields missing")
             return payload
-
         except (requests.RequestException, ValueError) as exc:
             if attempt == MAX_RETRIES:
                 raise RuntimeError(f"Could not fetch API page {page} after {MAX_RETRIES} attempts") from exc
@@ -91,11 +89,21 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
     raise RuntimeError(f"Failed to fetch page {page}")
 
 
+def game_key(game: dict[str, Any]) -> str:
+    platform = str(game.get("platform") or "Unknown").strip().casefold()
+    identifier = str(game.get("game_id") or game.get("id") or "").strip()
+    if not identifier:
+        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+    if not identifier:
+        raise ValueError("Game record has no usable game_id, id, or title")
+    return f"{platform}:{identifier}"
+
+
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch unique listings; return whether pagination reached a normal end."""
     all_games: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
-    seen_page_fingerprints: set[tuple[str, ...]] = set()
+    seen_page_fingerprints: set[frozenset[str]] = set()
     scan_complete = False
 
     with requests.Session() as session:
@@ -108,12 +116,12 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
 
             valid_records = [record for record in records if isinstance(record, dict)]
             page_keys = [game_key(record) for record in valid_records]
-            fingerprint = tuple(page_keys)
-
+            # Treat identical page contents as repetition regardless of order.
+            fingerprint = frozenset(page_keys)
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
                     "FreeGameRadar repeated page %s. Stopping pagination; %s unique records were collected. "
-                    "This scan is PARTIAL, and unseen listings on later pages cannot be checked.",
+                    "This scan is PARTIAL.",
                     page,
                     len(all_games),
                 )
@@ -137,9 +145,8 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 len(all_games),
             )
 
-            if len(records) < PAGE_SIZE:
-                scan_complete = True
-                break
+            # An empty page is the authoritative end marker. A short page can
+            # still be followed by another page, so do not infer completion.
             if added_this_page == 0:
                 log.warning("Page %s contained no new listings; stopping pagination safely.", page)
                 break
@@ -147,14 +154,6 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.", MAX_PAGES)
 
     return all_games, scan_complete
-def game_key(game: dict[str, Any]) -> str:
-    platform = str(game.get("platform") or "Unknown").strip().casefold()
-    identifier = str(game.get("game_id") or game.get("id") or "").strip()
-    if not identifier:
-        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
-    if not identifier:
-        raise ValueError("Game record has no usable game_id, id, or title")
-    return f"{platform}:{identifier}"
 
 
 def load_state() -> set[str]:
@@ -175,7 +174,10 @@ def save_state(seen: set[str]) -> None:
     if len(seen) > MAX_STATE_KEYS:
         raise RuntimeError(f"Duplicate state exceeds safety limit ({MAX_STATE_KEYS}); refusing to discard history")
     temp = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-    temp.write_text(json.dumps({"version": 1, "seen": sorted(seen)}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps({"version": 1, "seen": sorted(seen)}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     temp.replace(STATE_PATH)
 
 
@@ -185,6 +187,37 @@ def safe_text(value: Any) -> str:
 
 def enabled(field: str) -> bool:
     return bool(config.DISPLAY_FIELDS.get(field, False))
+
+
+def _format_footer_html_links(value: str) -> str:
+    """Convert supported user-friendly footer links into Telegram HTML."""
+    # Markdown links, including a prefix such as "Powered By ".
+    pattern = re.compile(r"\\[([^\\]]+)\\]\\((https?://[^\\s)]+|t\\.me/[^\\s)]+)\\)")
+    parts: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(value):
+        parts.append(safe_text(value[cursor:match.start()]))
+        target = match.group(2)
+        if target.startswith("t.me/"):
+            target = "https://" + target
+        parts.append(telegram_link(target, match.group(1)))
+        cursor = match.end()
+    if not parts:
+        return safe_text(value)
+    parts.append(safe_text(value[cursor:]))
+    return "".join(parts)
+
+
+def telegram_link(url: str, label: str) -> str:
+    return f'<a href="{html.escape(url, quote=True)}">{safe_text(label)}</a>'
+
+
+def format_footer_line(value: str) -> str:
+    """Support plain text, Markdown links, and legacy t.me shorthand."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    return _format_footer_html_links(value)
 
 
 def footer_lines() -> list[str]:
@@ -237,32 +270,11 @@ def valid_http_url(value: Any) -> str | None:
     url = str(value or "").strip()
     if not url:
         return None
-    parsed = requests.utils.urlparse(url)
+    parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None
     return url
 
-
-def telegram_link(url: str, label: str) -> str:
-    return f'<a href="{html.escape(url, quote=True)}">{safe_text(label)}</a>'
-
-
-def format_footer_line(value: str) -> str:
-    """Support plain text or Markdown-style [label](url) footer links."""
-    value = str(value or "").strip()
-    if not value:
-        return ""
-
-    match = re.fullmatch(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", value)
-    if match:
-        return telegram_link(match.group(2), match.group(1))
-
-    # Legacy shorthand used by existing config files.
-    match = re.fullmatch(r"(.+?)\s*\(t\.me/([^)]+)\)", value)
-    if match:
-        return telegram_link(f"https://t.me/{match.group(2)}", match.group(1).strip())
-
-    return safe_text(value)
 
 def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
     lines = [f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"]
@@ -276,9 +288,10 @@ def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
 
 
 def visible_text_length(text: str) -> int:
-    """Count visible text after parsing the HTML tags emitted by this notifier."""
+    """Count visible text in the HTML formatted by this notifier, using UTF-16 units."""
     without_tags = re.sub(r"<[^>]*>", "", text)
-    return len(html.unescape(without_tags))
+    visible = html.unescape(without_tags)
+    return len(visible.encode("utf-16-le")) // 2
 
 
 def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
@@ -287,12 +300,12 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
         return ""
 
     separator = "\n\n" if fixed_caption else ""
-    remaining = limit - visible_text_length(fixed_caption) - len(separator)
+    remaining = limit - visible_text_length(fixed_caption) - visible_text_length(separator)
     if remaining <= 0:
         return ""
 
     best_end = -1
-    for match in re.finditer(r"\.", description):
+    for match in re.finditer(r"\\.", description):
         candidate = description[:match.end()]
         if visible_text_length(candidate) <= remaining:
             best_end = match.end()
@@ -301,11 +314,10 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
     if best_end >= 0:
         return description[:best_end].rstrip()
-
     if visible_text_length(description) <= remaining:
         return description
-
     return ""
+
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
@@ -315,6 +327,7 @@ def compose_message(game: dict[str, Any], limit: int) -> str:
         return f"{fixed}\n\n{shortened}"
     return fixed
 
+
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
     title = str(game.get("title") or "Untitled game")
     image_url = valid_http_url(game.get("image_url")) if enabled("image") else None
@@ -322,7 +335,7 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
     if image_url:
         caption = compose_message(game, MAX_PHOTO_CAPTION)
         if visible_text_length(caption) > MAX_PHOTO_CAPTION:
-            raise ValueError(f"Photo caption for {title} exceeds {MAX_PHOTO_CAPTION} characters after trimming")
+            raise ValueError(f"Photo caption for {title} exceeds {MAX_PHOTO_CAPTION} Telegram UTF-16 characters")
         try:
             await client.send_file(channel, image_url, caption=caption, parse_mode="html")
             return
@@ -345,6 +358,8 @@ async def run_notifier() -> None:
     games, scan_complete = fetch_all_games(api_key)
     if not games:
         log.info("API returned an empty catalogue; leaving state untouched")
+        if not scan_complete:
+            raise RuntimeError("FreeGameRadar scan was partial and returned no records; retry next run.")
         return
 
     current_games: dict[str, dict[str, Any]] = {}
@@ -375,8 +390,7 @@ async def run_notifier() -> None:
         if scan_complete:
             log.info("No new free games")
             return
-        log.warning("No new records on partial scan; tracking state remains unchanged.")
-        raise RuntimeError("FreeGameRadar pagination was partial. No state was changed; retry next scheduled run.")
+        raise RuntimeError("FreeGameRadar pagination was partial. State was not changed; retry next scheduled run.")
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
     await client.connect()
@@ -388,7 +402,6 @@ async def run_notifier() -> None:
         for index, (key, game) in enumerate(new_games, start=1):
             title = str(game.get("title") or "Untitled game")
             posted = False
-
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     await send_one(client, channel, game)
@@ -403,13 +416,7 @@ async def run_notifier() -> None:
                         log.exception("Giving up on %s for this run; it remains eligible for the next run", title)
                         break
                     wait = min(2 ** attempt, 60)
-                    log.exception(
-                        "Failed posting %s (attempt %s/%s); retrying in %ss",
-                        title,
-                        attempt,
-                        MAX_RETRIES,
-                        wait,
-                    )
+                    log.exception("Failed posting %s (attempt %s/%s); retrying in %ss", title, attempt, MAX_RETRIES, wait)
                     await asyncio.sleep(wait)
 
             if posted:
@@ -423,18 +430,12 @@ async def run_notifier() -> None:
         if failed_titles:
             preview = ", ".join(failed_titles[:10])
             more = f" (and {len(failed_titles) - 10} more)" if len(failed_titles) > 10 else ""
-            raise RuntimeError(
-                f"{len(failed_titles)} game(s) could not be delivered and remain pending: {preview}{more}"
-            )
+            raise RuntimeError(f"{len(failed_titles)} game(s) could not be delivered and remain pending: {preview}{more}")
 
         if not scan_complete:
-            log.warning(
-                "Sent all %s new listings returned by the API, but the catalogue scan was partial. "
-                "Later API pages could not be checked; those games may be missed until the API is fixed.",
-                len(new_games),
-            )
             raise RuntimeError(
-                "FreeGameRadar returned a repeated page. Returned new games were sent, but the full catalogue was not checked."
+                "FreeGameRadar returned a partial catalogue. New games in the returned pages were sent, "
+                "but later pages were not available to scan."
             )
     finally:
         await client.disconnect()
