@@ -2,7 +2,7 @@ name: Free Game Notifier
 
 on:
   schedule:
-    # Default fallback schedule. Manual dispatch syncs this from config.py.
+    # Default fallback. Run the workflow manually after changing RUN_INTERVAL_HOURS.
     - cron: "17 */6 * * *"
   workflow_dispatch:
 
@@ -14,63 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync-schedule:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply configured schedule
-        run: |
-          python - <<'PY'
-          import ast
-          import re
-          from pathlib import Path
-
-          config_tree = ast.parse(Path("config.py").read_text(encoding="utf-8"))
-          interval = None
-          for node in config_tree.body:
-              if isinstance(node, ast.Assign) and any(
-                  isinstance(target, ast.Name) and target.id == "RUN_INTERVAL_HOURS"
-                  for target in node.targets
-              ):
-                  interval = ast.literal_eval(node.value)
-                  break
-
-          if type(interval) is not int or not 1 <= interval <= 24:
-              raise SystemExit("RUN_INTERVAL_HOURS in config.py must be an integer from 1 to 24")
-
-          path = Path(".github/workflows/notifier.yml")
-          source = path.read_text(encoding="utf-8")
-          updated = re.sub(
-              r'(?m)(^\s*- cron:\s*)["\'][^"\']+["\']',
-              lambda match: match.group(1) + f'"17 */{interval} * * *"',
-              source,
-              count=1,
-          )
-          if updated == source:
-              print("Workflow schedule already matches config.py.")
-          else:
-              path.write_text(updated, encoding="utf-8")
-              print(f"Updated scheduled trigger to every {interval} hours.")
-          PY
-      - name: Commit updated schedule
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/notifier.yml
-          if ! git diff --cached --quiet; then
-            git commit -m "Sync notifier schedule with config.py [skip ci]"
-            git push
-          fi
-
   notify:
-    needs: sync-schedule
-    if: always() && (needs.sync-schedule.result == 'success' || needs.sync-schedule.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
