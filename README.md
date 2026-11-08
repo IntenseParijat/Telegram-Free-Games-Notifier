@@ -63,7 +63,7 @@ All non-secret preferences are in `config.py`. Edit this file on `main` to chang
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `SEND_EXISTING_ON_FIRST_RUN` | `True` | Post all existing listings on the first scan, or silently seed the baseline. |
-| `RUN_INTERVAL_HOURS` | `6` | Scheduled interval, from 1 to 24 hours. |
+| `RUN_INTERVAL_HOURS` | `6` | Informational only. Edit the workflow cron expression to change the actual schedule. |
 | `TELEGRAM_CHANNEL_TAG` | `@IntenseGaming` | First footer line; set to `""` to disable. |
 | `TELEGRAM_FOOTER` | `Powered By [Intense Network](t.me/IntenseNetwork)` | Second footer line; set to `""` to disable. |
 | `DISPLAY_FIELDS` | See `config.py` | Controls the description, image and platform display. Category, discount, price, IDs and timestamps are intentionally omitted from captions. |
@@ -77,7 +77,7 @@ The repository tracks `data/seen_games.json` from the start. It contains the pre
 
 ### Schedule
 
-Set `RUN_INTERVAL_HOURS` to an integer from 1 to 24. The workflow updates its cron expression from this setting when you manually run **Actions → Free Game Notifier → Run workflow**. After changing the interval in `config.py`, manually dispatch the workflow once to apply the new schedule. GitHub scheduled runs are best-effort and may be delayed.
+The actual schedule is defined by the `cron` expression in `.github/workflows/notifier.yml` (currently every six hours at minute 17 UTC). Edit that expression to change the scheduled interval. `RUN_INTERVAL_HOURS` in `config.py` is retained as an informational compatibility setting and does not change GitHub's schedule. GitHub scheduled runs are best-effort and may be delayed.
 
 ### Footer
 
@@ -126,6 +126,14 @@ A partial scan never initializes a first-run baseline. That prevents the notifie
 If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
 When `data/seen_games.json` is absent, the notifier treats the next run as a first run. `SEND_EXISTING_ON_FIRST_RUN = True` posts the currently available free listings; `False` seeds the database without posting, but only after a complete scan. The workflow does not create an empty database before the notifier runs.
+
+## Tests
+
+Regression tests live in the root-level `test_notifier.py` file so test execution does not depend on a `tests/` package or `__init__.py`. From the repository root, run:
+
+```powershell
+py -m unittest -v test_notifier
+```
 
 ## Local run
 
