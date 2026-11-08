@@ -62,15 +62,18 @@ class PaginationTests(unittest.TestCase):
         self.assertFalse(complete)
         self.assertEqual([game["game_id"] for game in games], ["g1"])
 
-    def test_short_page_is_treated_as_final_page(self):
+    def test_short_page_continues_until_empty_page(self):
         page = [{"game_id": "g1", "platform": "Steam"}]
+        later_page = [{"game_id": "g2", "platform": "Epic"}]
         with patch.object(notifier, "fetch_page", side_effect=[
             {"success": True, "data": page},
+            {"success": True, "data": later_page},
+            {"success": True, "data": []},
         ]) as mocked:
             games, complete = notifier.fetch_all_games("key")
         self.assertTrue(complete)
-        self.assertEqual([game["game_id"] for game in games], ["g1"])
-        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual({game["game_id"] for game in games}, {"g1", "g2"})
+        self.assertEqual(mocked.call_count, 3)
 
 
 class CaptionTests(unittest.TestCase):
