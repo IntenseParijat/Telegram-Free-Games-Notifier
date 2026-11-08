@@ -1,0 +1,56 @@
+name: Free Game Notifier
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: free-game-notifier
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Upgrade pip and install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade -r requirements.txt
+
+      - name: Run notifier
+        env:
+          FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
+          TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
+        run: python notifier.py
+
+      - name: Commit duplicate-tracking state
+        if: always()
+        run: |
+          if [[ -f data/seen_games.json ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/seen_games.json
+            if ! git diff --cached --quiet; then
+              git commit -m "Update notified free games state [skip ci]"
+              git push
+            fi
+          fi
