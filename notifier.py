@@ -250,21 +250,17 @@ def format_footer_line(value: str) -> str:
     value = str(value or "").strip()
     if not value:
         return ""
+
     match = re.fullmatch(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", value)
     if match:
         return telegram_link(match.group(2), match.group(1))
-    # Convert a simple channel link such as t.me/IntenseNetwork into https.
-    match = re.fullmatch(r"([^\s]+)\s*\(t\.me/([^)]+)\)", value)
+
+    # Legacy shorthand used by existing config files.
+    match = re.fullmatch(r"(.+?)\s*\(t\.me/([^)]+)\)", value)
     if match:
-        label = match.group(1).strip()
-        return telegram_link(f"https://t.me/{match.group(2)}", label)
+        return telegram_link(f"https://t.me/{match.group(2)}", match.group(1).strip())
+
     return safe_text(value)
-
-
-def normalize_telegram_html(text: str) -> str:
-    """Turn config-friendly Markdown-style footer syntax into Telegram HTML."""
-    pattern = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
-    return pattern.sub(lambda m: telegram_link(m.group(2), m.group(1)), text)
 
 def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
     lines = [f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"]
