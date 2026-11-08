@@ -100,11 +100,10 @@ def game_key(game: dict[str, Any]) -> str:
 
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
-    """Fetch unique listings; return whether pagination reached a normal end.
+    """Fetch unique listings until the API signals the end or repeats a page.
 
-    The API uses 100-record pages. A short page is the final page, but its
-    repeated-content fingerprint must be checked first so a repeated short
-    page is not incorrectly treated as a successful full scan.
+    Do not infer the end of pagination from a short page: FreeGameRadar has
+    returned non-terminal short pages. A repeated page is a partial scan.
     """
     all_games: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
@@ -113,10 +112,12 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
 
     with requests.Session() as session:
         for page in range(1, MAX_PAGES + 1):
-            records = fetch_page(session, page, api_key)["data"]
+            payload = fetch_page(session, page, api_key)
+            records = payload["data"]
+
             if not records:
                 scan_complete = True
-                log.info("API pagination ended normally at page %s", page)
+                log.info("API pagination ended normally at empty page %s", page)
                 break
 
             valid_records = [record for record in records if isinstance(record, dict)]
@@ -125,8 +126,7 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
 
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
-                    "FreeGameRadar repeated page %s. Stopping pagination; %s unique records were collected. "
-                    "This scan is PARTIAL.",
+                    "FreeGameRadar repeated page %s; stopping with a partial scan after %s unique records.",
                     page,
                     len(all_games),
                 )
@@ -150,18 +150,14 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 len(all_games),
             )
 
-            # FreeGameRadar returns fewer than PAGE_SIZE records on its final
-            # page. Repetition was already checked, so this is a valid end.
-            if len(records) < PAGE_SIZE:
-                scan_complete = True
-                log.info("API returned its final short page at page %s", page)
-                break
-
             if added_this_page == 0:
-                log.warning("Page %s contained no new listings; stopping pagination safely.", page)
+                log.warning(
+                    "Page %s contained no new game IDs; stopping with a partial scan.",
+                    page,
+                )
                 break
         else:
-            log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.")
+            log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.", MAX_PAGES)
 
     return all_games, scan_complete
 
