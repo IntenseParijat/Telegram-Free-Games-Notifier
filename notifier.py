@@ -208,7 +208,7 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     """Keep whole sentences only, measuring Telegram-visible characters."""
     if not description:
         return ""
-    separator = "\\n\\n" if fixed_caption else ""
+    separator = "\n\n" if fixed_caption else ""
     available = limit - visible_text_length(fixed_caption) - len(separator)
     if available <= 0:
         return ""
