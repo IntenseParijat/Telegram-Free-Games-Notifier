@@ -283,10 +283,10 @@ def valid_http_url(value: Any) -> str | None:
     return url
 
 
-def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
-    """Create caption blocks in the requested order."""
+def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
+    """Return title, description and trailing fixed blocks in display order."""
     title = f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"
-    description = str(game.get("description") or "").strip() if enabled("description") else ""
+    description = safe_text(str(game.get("description") or "").strip()) if enabled("description") else ""
 
     blocks: list[str] = []
     platform = formatted_optional_fields(game)
@@ -308,14 +308,13 @@ def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
     footer = footer_lines()
     if footer:
         blocks.append("\\n".join(footer))
+    return title, description, "\\n\\n".join(blocks)
 
-    trailing = "\\n\\n".join(blocks)
-    message = title
-    if description:
-        message += "\\n\\n" + safe_text(description)
-    if trailing:
-        message += "\\n\\n" + trailing
-    return message, ""
+
+def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
+    title, description, trailing = _caption_blocks(game)
+    fixed = title + ("\\n\\n" + trailing if trailing else "")
+    return fixed, description
 
 
 def visible_text_length(text: str) -> int:
@@ -326,7 +325,7 @@ def visible_text_length(text: str) -> int:
 
 
 def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
-    """Keep complete sentences within the available rendered character budget."""
+    """Keep complete sentences within the rendered character budget."""
     if not description:
         return ""
     separator = "\\n\\n" if fixed_caption else ""
@@ -348,36 +347,15 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
-    title = f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"
-    description = safe_text(str(game.get("description") or "").strip()) if enabled("description") else ""
-
-    blocks: list[str] = []
-    platform = formatted_optional_fields(game)
-    if platform:
-        blocks.append("\\n".join(platform))
-    game_url = valid_http_url(game.get("game_url"))
-    if game_url:
-        blocks.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
-    end_date = (
-        game.get("end_date") or game.get("offer_end_date")
-        or game.get("free_until") or game.get("claim_end_date")
-        or game.get("promotion_end_date")
-    )
-    if end_date:
-        blocks.append(f"⏳ <b>Free until:</b> {safe_text(end_date)}")
-    footer = footer_lines()
-    if footer:
-        blocks.append("\\n".join(footer))
-
-    trailing = "\\n\\n".join(blocks)
-    fixed_without_description = title + ("\\n\\n" + trailing if trailing else "")
-    shortened = trim_description_to_fit(description, fixed_without_description, limit)
+    title, description, trailing = _caption_blocks(game)
+    fixed = title + ("\\n\\n" + trailing if trailing else "")
+    shortened = trim_description_to_fit(description, fixed, limit)
     if shortened:
-        message = title + "\\n\\n" + shortened
+        result = title + "\\n\\n" + shortened
         if trailing:
-            message += "\\n\\n" + trailing
-        return message
-    return fixed_without_description
+            result += "\\n\\n" + trailing
+        return result
+    return fixed
 
 
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
