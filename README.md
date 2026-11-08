@@ -58,7 +58,6 @@ A StringSession is effectively a login credential for your Telegram account. Any
 
 ## Configuration
 
-All non-secret preferences are in `config.py`. Edit this file on `main` to change the notifier. The workflow performs only Python syntax validation; no test suite is required.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
