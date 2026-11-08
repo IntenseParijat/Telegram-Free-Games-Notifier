@@ -58,7 +58,7 @@ A StringSession is effectively a login credential for your Telegram account. Any
 
 ## Configuration
 
-All non-secret preferences are in `config.py`. Edit this file on `main` to change the notifier.
+All non-secret preferences are in `config.py`. Edit this file on `main` to change the notifier. The workflow performs only Python syntax validation; no test suite is required.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -126,14 +126,6 @@ A partial scan never initializes a first-run baseline. That prevents the notifie
 If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
 When `data/seen_games.json` is absent, the notifier treats the next run as a first run. `SEND_EXISTING_ON_FIRST_RUN = True` posts the currently available free listings; `False` seeds the database without posting, but only after a complete scan. The workflow does not create an empty database before the notifier runs.
-
-## Tests
-
-Regression tests live in the root-level `test_notifier.py` file so test execution does not depend on a `tests/` package or `__init__.py`. From the repository root, run:
-
-```powershell
-py -m unittest -v test_notifier
-```
 
 ## Local run
 
