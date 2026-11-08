@@ -57,6 +57,8 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
             response = session.get(
                 API_URL,
                 headers=headers,
+                # /developer/free documents platform, page and limit only.
+                # The endpoint itself is the active 100%-free giveaways feed.
                 params={"page": page, "limit": PAGE_SIZE},
                 timeout=REQUEST_TIMEOUT,
             )
@@ -262,40 +264,10 @@ def footer_lines() -> list[str]:
 
 
 def formatted_optional_fields(game: dict[str, Any]) -> list[str]:
-    lines = []
+    """Only show the platform as metadata; suppress pricing/category noise."""
     if enabled("platform") and game.get("platform"):
-        lines.append(f"🎮 <b>Platform:</b> {safe_text(game['platform'])}")
-    if enabled("category") and game.get("category"):
-        lines.append(f"🏷 <b>Category:</b> {safe_text(game['category'])}")
-    if enabled("discount_percent") and game.get("discount_percent") not in (None, ""):
-        lines.append(f"🏷 <b>Discount:</b> {safe_text(game['discount_percent'])}%")
-
-    original = str(game.get("original_price") or "").strip() if enabled("original_price") else ""
-    final = str(game.get("final_price") or "").strip() if enabled("final_price") else ""
-    currency = str(game.get("currency") or "").strip() if enabled("currency") else ""
-    if original or final:
-        price = f"{safe_text(original)} → {safe_text(final)}" if original and final and original != final else safe_text(final or original)
-        if currency:
-            price += f" {safe_text(currency)}"
-        lines.append(f"💰 <b>Price:</b> {price}")
-
-    if enabled("discount_price") and game.get("discount_price") not in (None, ""):
-        lines.append(f"💸 <b>Discount price:</b> {safe_text(game['discount_price'])}")
-    if enabled("start_date") and game.get("start_date"):
-        lines.append(f"🗓 <b>Starts:</b> {safe_text(game['start_date'])}")
-    if enabled("end_date") and game.get("end_date"):
-        lines.append(f"⏳ <b>Ends:</b> {safe_text(game['end_date'])}")
-    if enabled("is_free") and game.get("is_free") is not None:
-        lines.append(f"🆓 <b>Free:</b> {safe_text(game['is_free'])}")
-    if enabled("game_id") and game.get("game_id"):
-        lines.append(f"<b>Game ID:</b> <code>{safe_text(game['game_id'])}</code>")
-    if enabled("id") and game.get("id") is not None:
-        lines.append(f"<b>Listing ID:</b> <code>{safe_text(game['id'])}</code>")
-    if enabled("created_at") and game.get("created_at"):
-        lines.append(f"<b>Added:</b> {safe_text(game['created_at'])}")
-    if enabled("updated_at") and game.get("updated_at"):
-        lines.append(f"<b>Updated:</b> {safe_text(game['updated_at'])}")
-    return lines
+        return [f"🎮 <b>Platform:</b> {safe_text(game['platform'])}"]
+    return []
 
 
 def valid_http_url(value: Any) -> str | None:
@@ -312,18 +284,42 @@ def valid_http_url(value: Any) -> str | None:
 
 
 def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
-    lines = [f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"]
-    lines.extend(formatted_optional_fields(game))
+    """Create caption blocks in the requested order."""
+    title = f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"
+    description = str(game.get("description") or "").strip() if enabled("description") else ""
+
+    blocks: list[str] = []
+    platform = formatted_optional_fields(game)
+    if platform:
+        blocks.append("\\n".join(platform))
+
     game_url = valid_http_url(game.get("game_url"))
     if game_url:
-        lines.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
-    lines.extend(footer_lines())
-    description = str(game.get("description") or "").strip() if enabled("description") else ""
-    return "\n".join(lines), description
+        blocks.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
+
+    end_date = (
+        game.get("end_date") or game.get("offer_end_date")
+        or game.get("free_until") or game.get("claim_end_date")
+        or game.get("promotion_end_date")
+    )
+    if end_date:
+        blocks.append(f"⏳ <b>Free until:</b> {safe_text(end_date)}")
+
+    footer = footer_lines()
+    if footer:
+        blocks.append("\\n".join(footer))
+
+    trailing = "\\n\\n".join(blocks)
+    message = title
+    if description:
+        message += "\\n\\n" + safe_text(description)
+    if trailing:
+        message += "\\n\\n" + trailing
+    return message, ""
 
 
 def visible_text_length(text: str) -> int:
-    """Count visible text in the HTML formatted by this notifier, using UTF-16 units."""
+    """Count visible text in HTML-formatted content using Telegram UTF-16 units."""
     without_tags = re.sub(r"<[^>]*>", "", text)
     visible = html.unescape(without_tags)
     return len(visible.encode("utf-16-le")) // 2
@@ -333,20 +329,17 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     """Keep complete sentences within the available rendered character budget."""
     if not description:
         return ""
-
-    separator = "\n\n" if fixed_caption else ""
+    separator = "\\n\\n" if fixed_caption else ""
     remaining = limit - visible_text_length(fixed_caption) - visible_text_length(separator)
     if remaining <= 0:
         return ""
-
     best_end = -1
-    for match in re.finditer(r"\.", description):
+    for match in re.finditer(r"\\.", description):
         candidate = description[:match.end()]
         if visible_text_length(candidate) <= remaining:
             best_end = match.end()
         else:
             break
-
     if best_end >= 0:
         return description[:best_end].rstrip()
     if visible_text_length(description) <= remaining:
@@ -355,12 +348,36 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
-    fixed, description = fixed_caption_parts(game)
-    escaped_description = safe_text(description)
-    shortened = trim_description_to_fit(escaped_description, fixed, limit)
+    title = f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"
+    description = safe_text(str(game.get("description") or "").strip()) if enabled("description") else ""
+
+    blocks: list[str] = []
+    platform = formatted_optional_fields(game)
+    if platform:
+        blocks.append("\\n".join(platform))
+    game_url = valid_http_url(game.get("game_url"))
+    if game_url:
+        blocks.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
+    end_date = (
+        game.get("end_date") or game.get("offer_end_date")
+        or game.get("free_until") or game.get("claim_end_date")
+        or game.get("promotion_end_date")
+    )
+    if end_date:
+        blocks.append(f"⏳ <b>Free until:</b> {safe_text(end_date)}")
+    footer = footer_lines()
+    if footer:
+        blocks.append("\\n".join(footer))
+
+    trailing = "\\n\\n".join(blocks)
+    fixed_without_description = title + ("\\n\\n" + trailing if trailing else "")
+    shortened = trim_description_to_fit(description, fixed_without_description, limit)
     if shortened:
-        return f"{fixed}\n\n{shortened}"
-    return fixed
+        message = title + "\\n\\n" + shortened
+        if trailing:
+            message += "\\n\\n" + trailing
+        return message
+    return fixed_without_description
 
 
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
@@ -375,7 +392,7 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
             # Only fall back when the photo operation clearly failed before
             # delivery. Retrying as text after an ambiguous network error can
             # create a duplicate post if Telegram accepted the original upload.
-            await client.send_file(channel, image_url, caption=caption, parse_mode="html")
+            await client.send_file(channel, image_url, caption=caption, parse_mode="html", force_document=False)
             return
         except FloodWaitError:
             raise
@@ -386,6 +403,86 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
     if visible_text_length(message) > MAX_TEXT_MESSAGE:
         raise ValueError(f"Text message for {title} exceeds Telegram's message limit after trimming")
     await client.send_message(channel, message, parse_mode="html", link_preview=False)
+
+
+def _normalised_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def _parse_offer_datetime(value: Any):
+    from datetime import datetime, timezone
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
+    """Reject permanent F2P and pass catalogue listings; accept live free-to-keep offers."""
+    from datetime import datetime, timezone
+
+    if not isinstance(game, dict):
+        return False
+    if str(game.get("is_free", "")).strip().casefold() not in {"1", "true", "yes", "y"}:
+        return False
+
+    end_value = (
+        game.get("end_date") or game.get("offer_end_date")
+        or game.get("free_until") or game.get("claim_end_date")
+        or game.get("promotion_end_date")
+    )
+    end_at = _parse_offer_datetime(end_value)
+    now_at = now or datetime.now(timezone.utc)
+    if now_at.tzinfo is None:
+        now_at = now_at.replace(tzinfo=timezone.utc)
+    if end_at is None or end_at <= now_at.astimezone(timezone.utc):
+        return False
+
+    # Require evidence that this is a normally paid game temporarily discounted to zero.
+    original = game.get("original_price") or game.get("regular_price") or game.get("retail_price")
+    try:
+        original_amount = float(re.sub(r"[^0-9.]", "", str(original or "")))
+    except ValueError:
+        original_amount = 0.0
+    if original_amount <= 0:
+        return False
+
+    # Subscription/catalogue availability is not a free-to-keep giveaway.
+    searchable = " ".join(
+        _normalised_text(game.get(field))
+        for field in (
+            "type", "offer_type", "access_type", "entitlement_type",
+            "subscription", "subscription_name", "source", "category",
+            "platform", "description", "title",
+        )
+    )
+    excluded = (
+        "game pass", "xbox game pass", "pc game pass", "playstation plus",
+        "ps plus", "subscription", "included with", "included in pass",
+        "game catalog", "game catalogue", "permanently free", "free to play",
+        "free to start", "free2play", "f2p",
+    )
+    if any(_normalised_text(term) in searchable for term in excluded):
+        return False
+
+    offer_type = _normalised_text(game.get("type") or game.get("offer_type"))
+    if any(term in offer_type for term in ("dlc", "loot", "beta", "in game")):
+        return False
+    return True
 
 
 async def run_notifier() -> None:
@@ -404,8 +501,13 @@ async def run_notifier() -> None:
 
     current_games: dict[str, dict[str, Any]] = {}
     for game in games:
-        if str(game.get("is_free", "")).strip().lower() in ("1", "true", "yes"):
+        if is_eligible_temporary_offer(game):
             current_games[game_key(game)] = game
+    log.info(
+        "Eligibility filter retained %s of %s API records; only active temporary paid-game offers qualify",
+        len(current_games),
+        len(games),
+    )
 
     first_run = not STATE_PATH.exists()
     seen = load_state()
