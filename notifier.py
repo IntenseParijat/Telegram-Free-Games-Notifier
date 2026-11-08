@@ -188,9 +188,9 @@ def enabled(field: str) -> bool:
 def footer_lines() -> list[str]:
     lines = []
     if str(config.TELEGRAM_CHANNEL_TAG).strip():
-        lines.append(safe_text(config.TELEGRAM_CHANNEL_TAG))
+        lines.append(format_footer_line(config.TELEGRAM_CHANNEL_TAG))
     if str(config.TELEGRAM_FOOTER).strip():
-        lines.append(safe_text(config.TELEGRAM_FOOTER))
+        lines.append(format_footer_line(config.TELEGRAM_FOOTER))
     return lines
 
 
