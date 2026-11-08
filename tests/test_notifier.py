@@ -16,7 +16,8 @@ class PaginationTests(unittest.TestCase):
             {"success": True, "data": first},
             {"success": True, "data": first},
         ]):
-            games = notifier.fetch_all_games("key")
+            games, complete = notifier.fetch_all_games("key")
+        self.assertFalse(complete)
         self.assertEqual([game["game_id"] for game in games], ["g1", "g2"])
 
     def test_duplicate_game_keys_across_pages_are_removed(self):
@@ -33,7 +34,8 @@ class PaginationTests(unittest.TestCase):
             {"success": True, "data": page2},
             {"success": True, "data": []},
         ]):
-            games = notifier.fetch_all_games("key")
+            games, complete = notifier.fetch_all_games("key")
+        self.assertTrue(complete)
         self.assertEqual({game["game_id"] for game in games}, {"g1", "g2", "g3"})
 
 
