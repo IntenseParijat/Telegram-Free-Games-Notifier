@@ -213,8 +213,7 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     if available <= 0:
         return ""
 
-    # Description is already HTML-escaped before it reaches this function.
-    # Iterate complete sentence endings and retain the longest prefix that fits.
+    # Description is HTML-escaped before it reaches this function.
     last_fitting_period = -1
     for match in re.finditer(r"\\.", description):
         candidate = description[:match.end()]
