@@ -91,17 +91,19 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
     raise RuntimeError(f"Failed to fetch page {page}")
 
 
-def fetch_all_games(api_key: str | None) -> list[dict[str, Any]]:
-    """Fetch listings with safe pagination fallback and duplicate filtering."""
+def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch unique listings; return whether pagination reached a normal end."""
     all_games: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     seen_page_fingerprints: set[tuple[str, ...]] = set()
+    scan_complete = False
 
     with requests.Session() as session:
         for page in range(1, MAX_PAGES + 1):
             records = fetch_page(session, page, api_key)["data"]
             if not records:
-                log.info("API pagination ended at page %s", page)
+                scan_complete = True
+                log.info("API pagination ended normally at page %s", page)
                 break
 
             valid_records = [record for record in records if isinstance(record, dict)]
@@ -110,8 +112,8 @@ def fetch_all_games(api_key: str | None) -> list[dict[str, Any]]:
 
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
-                    "FreeGameRadar repeated page %s. Stopping pagination and processing the %s unique listings returned so far. "
-                    "Listings on later pages may be unavailable until the API pagination issue is fixed.",
+                    "FreeGameRadar repeated page %s. Stopping pagination; %s unique records were collected. "
+                    "This scan is PARTIAL, and unseen listings on later pages cannot be checked.",
                     page,
                     len(all_games),
                 )
@@ -136,15 +138,15 @@ def fetch_all_games(api_key: str | None) -> list[dict[str, Any]]:
             )
 
             if len(records) < PAGE_SIZE:
+                scan_complete = True
                 break
             if added_this_page == 0:
                 log.warning("Page %s contained no new listings; stopping pagination safely.", page)
                 break
         else:
-            log.warning("Pagination safety limit reached after %s pages.", MAX_PAGES)
+            log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.", MAX_PAGES)
 
-    return all_games
-
+    return all_games, scan_complete
 def game_key(game: dict[str, Any]) -> str:
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
