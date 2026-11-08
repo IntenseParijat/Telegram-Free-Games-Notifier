@@ -66,7 +66,7 @@ All non-secret preferences are in `config.py`. Edit this file on `main` to chang
 | `RUN_INTERVAL_HOURS` | `6` | Scheduled interval, from 1 to 24 hours. |
 | `TELEGRAM_CHANNEL_TAG` | `@IntenseGaming` | First footer line; set to `""` to disable. |
 | `TELEGRAM_FOOTER` | `Powered By [Intense Network](t.me/IntenseNetwork)` | Second footer line; set to `""` to disable. |
-| `DISPLAY_FIELDS` | All `True` | Select which API fields appear in messages. |
+| `DISPLAY_FIELDS` | See `config.py` | Controls the description, image and platform display. Category, discount, price, IDs and timestamps are intentionally omitted from captions. |
 
 ### First-run behaviour
 
@@ -90,53 +90,18 @@ Powered By Intense Network
 
 The footer setting accepts plain text and Markdown-style links, including the configured shorthand `Powered By [Intense Network](t.me/IntenseNetwork)`. The notifier converts these to Telegram-supported HTML before sending, producing `Powered By Intense Network` with `Intense Network` clickable. Full `https://` links are also supported.
 
-### Available API fields
+### Caption contents
 
-The `DISPLAY_FIELDS` dictionary exposes these FreeGameRadar response fields. Each option is `True` by default; set it to `False` to hide it.
+The Telegram caption follows this exact order, with one blank line between each block:
 
-| Config key | API field | Meaning |
-| --- | --- | --- |
-| `description` | `description` | Game description; trimmed at the last complete period when needed. |
-| `image` | `image_url` | Attach the API-provided image. |
-| `platform` | `platform` | Store/platform name. |
-| `category` | `category` | API category. |
-| `discount_percent` | `discount_percent` | Discount percentage. |
-| `original_price` | `original_price` | Original price. |
-| `final_price` | `final_price` | Current/final price. |
-| `discount_price` | `discount_price` | Discount amount/value. |
-| `currency` | `currency` | Currency code. |
-| `start_date` | `start_date` | Offer start date, when supplied. |
-| `end_date` | `end_date` | Offer end date, when supplied. |
-| `is_free` | `is_free` | Whether the listing is free. |
-| `game_id` | `game_id` | Store-specific game identifier. |
-| `id` | `id` | FreeGameRadar listing identifier. |
-| `created_at` | `created_at` | Listing creation timestamp. |
-| `updated_at` | `updated_at` | Last update timestamp. |
+1. **Game title**
+2. **Description**
+3. **Platform**
+4. **Get the game** claim link
+5. **Free until** offer expiry
+6. Configured footer lines
 
-The game `title` and `game_url` are always included as the identity and claim destination; they are not configurable because they are essential to a useful alert.
-
-For example, to disable images and descriptions while retaining the rest:
-
-```python
-DISPLAY_FIELDS = {
-    "description": False,
-    "image": False,
-    "platform": True,
-    "category": True,
-    "discount_percent": True,
-    "original_price": True,
-    "final_price": True,
-    "discount_price": True,
-    "currency": True,
-    "start_date": True,
-    "end_date": True,
-    "is_free": True,
-    "game_id": True,
-    "id": True,
-    "created_at": True,
-    "updated_at": True,
-}
-```
+Category, discount percentage, original/final/discount price, currency, `is_free`, game IDs, listing IDs, and created/updated timestamps are not shown. The footer remains controlled by `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER`.
 
 ### Description and Telegram limits
 
@@ -146,7 +111,7 @@ If images are disabled or the image upload fails, a text message is sent instead
 
 ## Duplicate protection
 
-The notifier stores platform plus `game_id` (falling back to the API listing `id`) in `data/seen_games.json`. The same game on different platforms is treated as a separate listing. IDs are retained even if a listing temporarily disappears from the API. The state file is committed back to the repository after each workflow run.
+The notifier stores platform plus `game_id` (falling back to the API listing `id`) in `data/seen_games.json`. A record is eligible only when it is currently marked free, has a future offer-expiry field, has a positive original/retail price, and does not indicate permanent F2P or subscription/pass catalogue access. The same game on different platforms is treated as a separate listing. IDs are retained even if a listing temporarily disappears from the API. The state file is committed back to the repository after each workflow run.
 
 Do not delete or replace `data/seen_games.json` unless you intentionally want to reset duplicate tracking.
 
@@ -174,8 +139,8 @@ Set the same environment variables used by the workflow before running locally.
 
 ## Runtime behaviour
 
-- Fetches the complete paginated FreeGameRadar catalogue.
+- Fetches the paginated FreeGameRadar active-free-giveaways endpoint (`/developer/free`, with documented `page` and `limit` parameters).
 - Retries transient API failures and handles Telegram flood waits.
-- Posts each newly discovered listing once, using the API image when enabled.
+- Posts each newly discovered eligible time-limited giveaway once, using the API image as a compressed Telegram photo (never as a document).
 - Marks a listing as seen only after Telegram confirms its message was sent.
 - Supports manual workflow dispatch as a recovery option.
