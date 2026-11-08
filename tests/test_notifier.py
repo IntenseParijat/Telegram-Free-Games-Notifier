@@ -6,6 +6,7 @@ from unittest.mock import patch
 import notifier
 
 
+
 class PaginationTests(unittest.TestCase):
     def test_repeated_page_stops_and_returns_unique_records(self):
         first = [
@@ -75,6 +76,26 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual({game["game_id"] for game in games}, {"g1", "g2"})
         self.assertEqual(mocked.call_count, 3)
 
+    def test_different_pages_of_same_records_are_detected_after_deduplication(self):
+        first = [{"game_id": "g1", "platform": "Steam"}]
+        second = [{"game_id": "g2", "platform": "Epic"}]
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": first},
+            {"success": True, "data": second},
+            {"success": True, "data": [{"game_id": "g1", "platform": "Steam"}, {"game_id": "g2", "platform": "Epic"}]},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertFalse(complete)
+        self.assertEqual(len(games), 2)
+
+    def test_rejects_page_records_that_are_not_objects(self):
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": ["not-a-game"]},
+            {"success": True, "data": []},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertTrue(complete)
+        self.assertEqual(games, [])
 
 class CaptionTests(unittest.TestCase):
     def test_sentence_boundary_trimming_matches_requested_example(self):
