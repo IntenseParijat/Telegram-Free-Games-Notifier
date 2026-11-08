@@ -93,7 +93,7 @@ def game_key(game: dict[str, Any]) -> str:
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
     return f"{platform}:{identifier}"
