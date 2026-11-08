@@ -2,7 +2,7 @@ name: Free Game Notifier
 
 on:
   schedule:
-    # Default fallback; the workflow updates this cron from config.py each run.
+    # The cron is kept aligned with config.py by the setup workflow.
     - cron: "17 */6 * * *"
   workflow_dispatch:
 
@@ -14,99 +14,79 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  sync-schedule:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply configured schedule
+        run: |
+          python - <<'PY'
+          import ast
+          import re
+          from pathlib import Path
+
+          config = ast.parse(Path("config.py").read_text(encoding="utf-8"))
+          hours = None
+          for node in config.body:
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == "RUN_INTERVAL_HOURS"
+                  for target in node.targets
+              ):
+                  hours = ast.literal_eval(node.value)
+                  break
+          if type(hours) is not int or not 1 <= hours <= 24:
+              raise SystemExit("RUN_INTERVAL_HOURS must be an integer from 1 to 24")
+
+          path = Path(".github/workflows/notifier.yml")
+          source = path.read_text(encoding="utf-8")
+          updated = re.sub(
+              r'(?m)(^\s*- cron:\s*)["\'][^"\']+["\']',
+              lambda match: match.group(1) + f'"17 */{hours} * * *"',
+              source,
+              count=1,
+          )
+          if updated == source:
+              print("Workflow cron already matches config.py or no update was required.")
+          else:
+              path.write_text(updated, encoding="utf-8")
+              print(f"Updated cron to every {hours} hours.")
+          PY
+      - name: Commit changed schedule
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/notifier.yml
+          if ! git diff --cached --quiet; then
+            git commit -m "Sync notifier schedule with config.py [skip ci]"
+            git push
+          fi
+
   notify:
+    needs: sync-schedule
+    if: always() && (needs.sync-schedule.result == 'success' || needs.sync-schedule.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-
       - name: Upgrade pip and install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade -r requirements.txt
-
-      - name: Sync scheduled interval from config.py
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
-          WORKFLOW_ID: notifier.yml
-        run: |
-          python - <<'PY'
-          import ast
-          import base64
-          import json
-          import os
-          import re
-          import urllib.request
-          from pathlib import Path
-
-          config_tree = ast.parse(Path("config.py").read_text(encoding="utf-8"))
-          interval = None
-          for node in config_tree.body:
-              if isinstance(node, ast.Assign) and any(
-                  isinstance(target, ast.Name) and target.id == "RUN_INTERVAL_HOURS"
-                  for target in node.targets
-              ):
-                  interval = ast.literal_eval(node.value)
-                  break
-
-          if type(interval) is not int or not 1 <= interval <= 24:
-              raise SystemExit("RUN_INTERVAL_HOURS in config.py must be an integer from 1 to 24")
-
-          workflow_path = ".github/workflows/notifier.yml"
-          workflow = Path(workflow_path).read_text(encoding="utf-8")
-          cron = f"17 */{interval} * * *"
-          updated = re.sub(
-              r'(?m)(^\s*- cron:\s*)["\'][^"\']+["\']',
-              lambda match: match.group(1) + f'"{cron}"',
-              workflow,
-              count=1,
-          )
-          if updated == workflow:
-              raise SystemExit("Could not find the workflow schedule cron entry")
-          Path(workflow_path).write_text(updated, encoding="utf-8")
-
-          token = os.environ["GH_TOKEN"]
-          repository = os.environ["REPOSITORY"]
-          api_url = f"https://api.github.com/repos/{repository}/contents/{workflow_path}"
-          headers = {
-              "Authorization": f"Bearer {token}",
-              "Accept": "application/vnd.github+json",
-              "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "Telegram-Free-Games-Notifier",
-          }
-
-          get_request = urllib.request.Request(api_url, headers=headers)
-          with urllib.request.urlopen(get_request) as response:
-              current = json.load(response)
-
-          content = {
-              "message": f"Set notifier schedule to every {interval} hours [skip ci]",
-              "content": base64.b64encode(updated.encode("utf-8")).decode("ascii"),
-              "sha": current["sha"],
-              "branch": "main",
-          }
-          put_request = urllib.request.Request(
-              api_url,
-              data=json.dumps(content).encode("utf-8"),
-              headers={**headers, "Content-Type": "application/json"},
-              method="PUT",
-          )
-          with urllib.request.urlopen(put_request) as response:
-              json.load(response)
-
-          print(f"GitHub Actions cron synchronized: {cron}")
-          PY
-
       - name: Run notifier
         env:
           FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
@@ -115,13 +95,12 @@ jobs:
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
         run: python notifier.py
-
       - name: Commit duplicate-tracking state
         if: always()
         run: |
           if [[ -f data/seen_games.json ]]; then
             git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.email "41898282+actions[bot]@users.noreply.github.com"
             git add data/seen_games.json
             if ! git diff --cached --quiet; then
               git commit -m "Update notified free games state [skip ci]"
