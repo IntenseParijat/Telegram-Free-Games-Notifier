@@ -18,11 +18,15 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 
+import config
+
 API_URL = "https://freegameradar.com/api/v1/developer/free"
 STATE_PATH = Path(os.getenv("STATE_FILE", "data/seen_games.json"))
 PAGE_SIZE = 100
-MAX_DESCRIPTION = 2_500
-MAX_CAPTION = 1_000
+# A free Telegram account can send photo captions of up to 1,024 characters.
+# Use a small margin because HTML entities are parsed by Telegram.
+MAX_PHOTO_CAPTION = 1_000
+MAX_TEXT_MESSAGE = 4_096
 REQUEST_TIMEOUT = (15, 45)
 MAX_RETRIES = 5
 MAX_PAGES = 10_000
@@ -30,6 +34,25 @@ MAX_STATE_KEYS = 100_000
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("free-game-notifier")
+
+# Fields the API can provide. The config controls which ones are included.
+API_FIELDS = (
+    "description",
+    "platform",
+    "category",
+    "discount_percent",
+    "original_price",
+    "final_price",
+    "discount_price",
+    "currency",
+    "start_date",
+    "end_date",
+    "is_free",
+    "game_id",
+    "id",
+    "created_at",
+    "updated_at",
+)
 
 
 def required_env(name: str) -> str:
@@ -127,26 +150,74 @@ def safe_text(value: Any) -> str:
     return html.escape(str(value or "").strip(), quote=False)
 
 
-def build_caption(game: dict[str, Any]) -> str:
-    title = safe_text(game.get("title") or "Untitled game")
-    platform = safe_text(game.get("platform") or "Unknown platform")
-    category = safe_text(game.get("category") or "")
-    description = re.sub(r"\n{3,}", "\n\n", str(game.get("description") or "").strip())
-    description = html.escape(description, quote=False)
-    if len(description) > MAX_DESCRIPTION:
-        description = description[:MAX_DESCRIPTION - 1].rstrip() + "…"
-    lines = [f"<b>{title}</b>", f"🎮 <b>Platform:</b> {platform}"]
-    if category:
-        lines.append(f"🏷 <b>Category:</b> {category}")
-    original = str(game.get("original_price") or "").strip()
-    final = str(game.get("final_price") or "").strip()
+def enabled(field: str) -> bool:
+    return bool(config.DISPLAY_FIELDS.get(field, False))
+
+
+def footer_lines() -> list[str]:
+    result = []
+    tag = str(config.TELEGRAM_CHANNEL_TAG).strip()
+    footer = str(config.TELEGRAM_FOOTER).strip()
+    if tag:
+        result.append(safe_text(tag))
+    if footer:
+        result.append(safe_text(footer))
+    return result
+
+
+def formatted_optional_fields(game: dict[str, Any]) -> list[str]:
+    lines = []
+    if enabled("platform") and game.get("platform"):
+        lines.append(f"🎮 <b>Platform:</b> {safe_text(game['platform'])}")
+    if enabled("category") and game.get("category"):
+        lines.append(f"🏷 <b>Category:</b> {safe_text(game['category'])}")
+
+    if enabled("discount_percent") and game.get("discount_percent") not in (None, ""):
+        lines.append(f"🏷 <b>Discount:</b> {safe_text(game['discount_percent'])}%")
+
+    original = str(game.get("original_price") or "").strip() if enabled("original_price") else ""
+    final = str(game.get("final_price") or "").strip() if enabled("final_price") else ""
+    currency = str(game.get("currency") or "").strip() if enabled("currency") else ""
     if original or final:
-        price = f"{safe_text(original)} → {safe_text(final)}" if original and final and original != final else safe_text(final or original)
+        if original and final and original != final:
+            price = f"{safe_text(original)} → {safe_text(final)}"
+        else:
+            price = safe_text(final or original)
+        if currency:
+            price += f" {safe_text(currency)}"
         lines.append(f"💰 <b>Price:</b> {price}")
-    if description:
-        lines.extend(["", description])
-    lines.append("")
-    return "\n".join(lines)
+
+    if enabled("discount_price") and game.get("discount_price") not in (None, ""):
+        lines.append(f"💸 <b>Discount price:</b> {safe_text(game['discount_price'])}")
+
+    if enabled("start_date") and game.get("start_date"):
+        lines.append(f"🗓 <b>Starts:</b> {safe_text(game['start_date'])}")
+    if enabled("end_date") and game.get("end_date"):
+        lines.append(f"⏳ <b>Ends:</b> {safe_text(game['end_date'])}")
+    if enabled("is_free") and game.get("is_free") is not None:
+        lines.append(f"🆓 <b>Free:</b> {safe_text(game['is_free'])}")
+    if enabled("game_id") and game.get("game_id"):
+        lines.append(f"<b>Game ID:</b> <code>{safe_text(game['game_id'])}</code>")
+    if enabled("id") and game.get("id") is not None:
+        lines.append(f"<b>Listing ID:</b> <code>{safe_text(game['id'])}</code>")
+    if enabled("created_at") and game.get("created_at"):
+        lines.append(f"<b>Added:</b> {safe_text(game['created_at'])}")
+    if enabled("updated_at") and game.get("updated_at"):
+        lines.append(f"<b>Updated:</b> {safe_text(game['updated_at'])}")
+    return lines
+
+
+def build_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
+    """Build fixed caption content and raw description separately."""
+    title = safe_text(game.get("title") or "Untitled game")
+    fixed = [f"<b>{title}</b>"]
+    fixed.extend(formatted_optional_fields(game))
+    game_url = valid_http_url(game.get("game_url"))
+    if game_url:
+        fixed.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
+    fixed.extend(footer_lines())
+    description = str(game.get("description") or "").strip() if enabled("description") else ""
+    return "\n".join(fixed), description
 
 
 def valid_http_url(value: Any) -> str | None:
@@ -154,36 +225,54 @@ def valid_http_url(value: Any) -> str | None:
     return url if url.startswith(("https://", "http://")) else None
 
 
+def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
+    """Keep complete description sentences that fit; never cut mid-sentence."""
+    if not description:
+        return ""
+    separator = "\n\n" if fixed_caption else ""
+    budget = limit - len(fixed_caption) - len(separator)
+    if budget <= 0:
+        return ""
+
+    # If all description text fits, retain it.
+    if len(description) <= budget:
+        return description
+
+    # Keep text only through the last complete period that fits.
+    candidate = description[:budget]
+    last_period = candidate.rfind(".")
+    if last_period < 0:
+        return ""
+    return candidate[:last_period + 1].rstrip()
+
+
+def compose_message(game: dict[str, Any], limit: int) -> str:
+    fixed, description = build_caption_parts(game)
+    trimmed_description = trim_description_to_fit(description, fixed, limit)
+    if trimmed_description:
+        return f"{fixed}\n\n{safe_text(trimmed_description)}"
+    return fixed
+
+
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
     title = str(game.get("title") or "Untitled game")
     game_url = valid_http_url(game.get("game_url"))
-    image_url = valid_http_url(game.get("image_url"))
-    caption = build_caption(game)
-    if game_url:
-        caption += f'\n🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>'
-    else:
-        log.warning("No valid game_url for %s", title)
+    image_url = valid_http_url(game.get("image_url")) if enabled("image") else None
 
     if image_url:
-        photo_caption = caption
-        if len(photo_caption) > MAX_CAPTION:
-            photo_caption = f"<b>{safe_text(title)}</b>\n🎮 <b>Platform:</b> {safe_text(game.get('platform') or 'Unknown platform')}"
-            if game_url:
-                photo_caption += f'\n🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>'
+        caption = compose_message(game, MAX_PHOTO_CAPTION)
+        # Photo caption must never exceed the ordinary Telegram account limit.
+        if len(caption) > MAX_PHOTO_CAPTION:
+            caption = compose_message(game, MAX_PHOTO_CAPTION - 20)
         try:
-            await client.send_file(channel, image_url, caption=photo_caption, parse_mode="html")
-        except Exception as exc:
-            log.warning("Image send failed for %s (%s); using text fallback", title, exc)
-            text = caption if len(caption) <= 4096 else caption[:4095].rstrip() + "…"
-            await client.send_message(channel, text, parse_mode="html", link_preview=False)
+            await client.send_file(channel, image_url, caption=caption, parse_mode="html")
             return
-        if len(caption) > MAX_CAPTION:
-            full_text = caption if len(caption) <= 4096 else caption[:4095].rstrip() + "…"
-            await client.send_message(channel, full_text, parse_mode="html", link_preview=False)
-        return
+        except Exception as exc:
+            log.warning("Image send failed for %s (%s); falling back to text", title, exc)
 
-    text = caption if len(caption) <= 4096 else caption[:4095].rstrip() + "…"
-    await client.send_message(channel, text, parse_mode="html", link_preview=False)
+    # Text messages can be longer than photo captions.
+    message = compose_message(game, MAX_TEXT_MESSAGE)
+    await client.send_message(channel, message, parse_mode="html", link_preview=False)
 
 
 async def run_notifier() -> None:
@@ -208,15 +297,23 @@ async def run_notifier() -> None:
         candidates.append((key, game))
 
     seen = load_state()
-    if not STATE_PATH.exists():
+    first_run = not STATE_PATH.exists()
+    if first_run and not bool(config.SEND_EXISTING_ON_FIRST_RUN):
         save_state(current_keys)
-        log.info("Initialized duplicate state with %s listings; no first-run posts", len(current_keys))
+        log.info("Initialized duplicate state with %s listings; first-run posting is disabled", len(current_keys))
         return
 
     new_games = [(key, game) for key, game in candidates if key not in seen]
-    log.info("API records: %s | free listings: %s | new: %s", len(games), len(candidates), len(new_games))
+    if first_run and bool(config.SEND_EXISTING_ON_FIRST_RUN):
+        log.info("First-run posting is enabled; %s existing listings will be posted", len(new_games))
+    else:
+        log.info("API records: %s | free listings: %s | new: %s", len(games), len(candidates), len(new_games))
+
     if not new_games:
         log.info("No new free games")
+        # On an enabled first run, persist the baseline after processing.
+        if first_run:
+            save_state(current_keys)
         return
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
@@ -247,11 +344,22 @@ async def run_notifier() -> None:
                     await asyncio.sleep(wait)
             await asyncio.sleep(1)
     finally:
+        if first_run:
+            # Record all listings already in the initial catalogue, including ones skipped due to send errors.
+            save_state(seen | current_keys)
         await client.disconnect()
 
 
 def main() -> int:
     try:
+        interval = int(config.RUN_INTERVAL_HOURS)
+        if not 1 <= interval <= 24:
+            raise ValueError("RUN_INTERVAL_HOURS must be between 1 and 24")
+        if not isinstance(config.DISPLAY_FIELDS, dict):
+            raise ValueError("DISPLAY_FIELDS must be a dictionary")
+        for field in API_FIELDS + ("image",):
+            if field not in config.DISPLAY_FIELDS:
+                raise ValueError(f"DISPLAY_FIELDS is missing the '{field}' setting")
         asyncio.run(run_notifier())
         return 0
     except Exception:
