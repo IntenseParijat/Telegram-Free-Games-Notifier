@@ -178,12 +178,12 @@ class CaptionOrderTests(unittest.TestCase):
             message = notifier.compose_message(game, 1000)
 
         expected = (
-            "<b>Test Game</b>\\n\\n"
-            "First sentence. Second sentence.\\n\\n"
-            "🎮 <b>Platform:</b> Epic Games\\n\\n"
-            '🔗 <a href="https://example.com/claim">Get the game</a>\\n\\n'
-            "⏳ <b>Free until:</b> 2026-11-15\\n\\n"
-            "@Channel\\nPowered By Intense Network"
+            "<b>Test Game</b>\n\n"
+            "First sentence. Second sentence.\n\n"
+            "🎮 <b>Platform:</b> Epic Games\n\n"
+            '🔗 <a href="https://example.com/claim">Get the game</a>\n\n'
+            "⏳ <b>Free until:</b> 2026-11-15\n\n"
+            "@Channel\nPowered By Intense Network"
         )
         self.assertEqual(message, expected)
 
@@ -235,7 +235,7 @@ class CaptionTests(unittest.TestCase):
         ):
             message = notifier.compose_message(game, 170)
         self.assertLessEqual(notifier.visible_text_length(message), 170)
-        self.assertTrue(message.startswith("<b>Long game</b>\\n\\n"))
+        self.assertTrue(message.startswith("<b>Long game</b>\n\n"))
         self.assertIn("🎮 <b>Platform:</b>", message)
         self.assertLess(message.index("🎮 <b>Platform:</b>"), message.index("Get the game"))
         self.assertLess(message.index("Get the game"), message.index("Free until"))
