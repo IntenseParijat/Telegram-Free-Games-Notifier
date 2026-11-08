@@ -63,6 +63,10 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+actions[bot]@users.noreply.github.com"
+          if [[ ! -f data/seen_games.json ]]; then
+            echo "No duplicate-state file exists; notifier did not create one."
+            exit 0
+          fi
           git add data/seen_games.json
           if git diff --cached --quiet; then
             echo "Duplicate state did not change."
