@@ -243,7 +243,7 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     if not description:
         return ""
 
-    separator = "\\n\\n" if fixed_caption else ""
+    separator = "\n\n" if fixed_caption else ""
     remaining = limit - visible_text_length(fixed_caption) - len(separator)
     if remaining <= 0:
         return ""
