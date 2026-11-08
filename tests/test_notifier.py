@@ -100,15 +100,19 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual([game["game_id"] for game in games], ["g1"])
         self.assertEqual(mocked.call_count, 3)
 
-    def test_repeated_malformed_page_stops_safely(self):
+    def test_repeated_malformed_pages_continue_until_empty_page(self):
         malformed = ["not-a-game", None, 42]
+        valid_page = [{"game_id": "g1", "platform": "Steam"}]
         with patch.object(notifier, "fetch_page", side_effect=[
             {"success": True, "data": malformed},
             {"success": True, "data": malformed},
-        ]):
+            {"success": True, "data": valid_page},
+            {"success": True, "data": []},
+        ]) as mocked:
             games, complete = notifier.fetch_all_games("key")
-        self.assertFalse(complete)
-        self.assertEqual(games, [])
+        self.assertTrue(complete)
+        self.assertEqual([game["game_id"] for game in games], ["g1"])
+        self.assertEqual(mocked.call_count, 4)
 
 class CaptionTests(unittest.TestCase):
     def test_sentence_boundary_trimming_matches_requested_example(self):
