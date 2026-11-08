@@ -342,8 +342,7 @@ async def run_notifier() -> None:
     channel = required_env("TELEGRAM_CHANNEL")
     session_string = required_env("TELEGRAM_SESSION")
 
-    # Do not change state unless the scan has returned a usable catalogue.
-    games = fetch_all_games(api_key)
+    games, scan_complete = fetch_all_games(api_key)
     if not games:
         log.info("API returned an empty catalogue; leaving state untouched")
         return
@@ -353,28 +352,31 @@ async def run_notifier() -> None:
         if str(game.get("is_free", "")).strip().lower() in ("1", "true", "yes"):
             current_games[game_key(game)] = game
 
-    # The first-run switch applies only when the state file has never existed.
-    # A tracked empty JSON file is a valid first-run baseline state.
+    # A partial scan can notify confirmed unseen records, but it must never
+    # initialize the first-run baseline or claim that the whole catalogue was checked.
     first_run = not STATE_PATH.exists()
     seen = load_state()
 
-    if first_run and not config.SEND_EXISTING_ON_FIRST_RUN:
+    if first_run and not config.SEND_EXISTING_ON_FIRST_RUN and scan_complete:
         save_state(set(current_games))
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
     new_games = [(key, game) for key, game in current_games.items() if key not in seen]
     log.info(
-        "Fetched %s API records; %s unique free listings; %s not yet posted",
+        "Fetched %s API records; %s unique free listings; %s not yet posted; scan_complete=%s",
         len(games),
         len(current_games),
         len(new_games),
+        scan_complete,
     )
 
     if not new_games:
-        if first_run:
-            save_state(set())
+        if first_run and scan_complete:
+            save_state(set(current_games))
         log.info("No new free games")
+        if not scan_complete:
+            raise RuntimeError("FreeGameRadar pagination was partial. No state was changed; retry next scheduled run.")
         return
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
@@ -412,8 +414,6 @@ async def run_notifier() -> None:
                     await asyncio.sleep(wait)
 
             if posted:
-                # Persist after each confirmed Telegram send, so a later failure
-                # does not cause already delivered games to be reposted.
                 seen.add(key)
                 save_state(seen)
                 log.info("Posted %s (%s/%s)", title, index, len(new_games))
@@ -422,11 +422,22 @@ async def run_notifier() -> None:
 
             await asyncio.sleep(1)
 
+        if not scan_complete:
+            log.warning(
+                "Messages from %s unique listings were processed, but the overall catalogue scan was partial. "
+                "The API must be fixed to expose later pages.",
+                len(current_games),
+            )
         if failed_titles:
             preview = ", ".join(failed_titles[:10])
             more = f" (and {len(failed_titles) - 10} more)" if len(failed_titles) > 10 else ""
             raise RuntimeError(
                 f"{len(failed_titles)} game(s) could not be delivered and remain pending: {preview}{more}"
+            )
+        if not scan_complete:
+            raise RuntimeError(
+                "Telegram notifications for returned listings were processed, but FreeGameRadar pagination was partial. "
+                "The workflow remains failed so the missing later catalogue pages are visible."
             )
     finally:
         await client.disconnect()
