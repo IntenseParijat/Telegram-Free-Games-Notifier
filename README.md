@@ -154,9 +154,11 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## API pagination and recovery
 
-The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging. Unique records already returned can still be processed, but the scan is marked **partial** and the GitHub Actions job remains failed. It does not initialize a first-run baseline from a partial scan. This avoids both a repeated-page crash and falsely claiming that games on later pages were checked. The API must return valid subsequent pages before a run can be considered complete.
+The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging. It still processes unique records already returned, so new games on the returned page can be posted, but the run remains failed and clearly reports that the catalogue scan was partial. Games on later pages cannot be detected until FreeGameRadar fixes its pagination behaviour.
 
-If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. Successful Telegram deliveries are saved to the database immediately. A game whose delivery fails remains unseen and is eligible for the next run. The workflow commits the state even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
+A partial scan never initializes a first-run baseline. That prevents the notifier from treating the first page as the complete catalogue and permanently suppressing games it could not see. If the database already exists, successfully posted titles are recorded normally; failed Telegram deliveries remain unseen and eligible for the next run.
+
+If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
 The repository keeps an empty `data/seen_games.json` file under version control. Do not delete it unless intentionally resetting duplicate tracking. With `SEND_EXISTING_ON_FIRST_RUN = True`, an empty tracked database is treated as a first run and the current listings are posted. Set it to `False` to silently seed the current catalogue instead.
 
