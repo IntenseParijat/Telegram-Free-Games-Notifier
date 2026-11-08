@@ -222,6 +222,25 @@ class CaptionTests(unittest.TestCase):
         )
         self.assertLessEqual(len(fixed) + 2 + len(result), 200)
 
+    def test_compose_message_trims_description_but_keeps_correct_order(self):
+        game = {
+            "title": "Long game",
+            "description": "A" * 60 + ". " + "B" * 60 + ".",
+            "platform": "Steam",
+            "game_url": "https://example.com/claim",
+            "end_date": "2026-11-15",
+        }
+        with patch.object(notifier, "enabled", side_effect=lambda field: field in {"description", "platform"}), patch.object(
+            notifier, "footer_lines", return_value=["@Channel"]
+        ):
+            message = notifier.compose_message(game, 170)
+        self.assertLessEqual(notifier.visible_text_length(message), 170)
+        self.assertTrue(message.startswith("<b>Long game</b>\\n\\n"))
+        self.assertIn("🎮 <b>Platform:</b>", message)
+        self.assertLess(message.index("🎮 <b>Platform:</b>"), message.index("Get the game"))
+        self.assertLess(message.index("Get the game"), message.index("Free until"))
+        self.assertLess(message.index("Free until"), message.index("@Channel"))
+
     def test_html_entities_are_counted_as_visible_characters(self):
         fixed = "X" * 98
         description = "A &amp; B. A &amp; B. A &amp; B."
