@@ -76,25 +76,59 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
 
 
 def fetch_all_games(api_key: str | None) -> list[dict[str, Any]]:
+    """Fetch unique listings and tolerate an API that repeats a page."""
     all_games: list[dict[str, Any]] = []
-    fingerprints: set[tuple[str, ...]] = set()
+    seen_ids: set[str] = set()
+    seen_page_fingerprints: set[tuple[str, ...]] = set()
     with requests.Session() as session:
         for page in range(1, MAX_PAGES + 1):
             records = fetch_page(session, page, api_key)["data"]
             if not records:
+                log.info("API pagination ended at page %s", page)
                 break
-            fingerprint = tuple(str(g.get("id") or g.get("game_id") or "") for g in records if isinstance(g, dict))
-            if fingerprint in fingerprints:
-                raise RuntimeError(f"FreeGameRadar repeated page {page}; aborting to avoid an incomplete scan")
-            fingerprints.add(fingerprint)
-            all_games.extend(g for g in records if isinstance(g, dict))
-            log.info("Fetched page %s: %s records (total %s)", page, len(records), len(all_games))
+
+            valid_records = [record for record in records if isinstance(record, dict)]
+            fingerprint = tuple(
+                str(record.get("id") or record.get("game_id") or game_key(record))
+                for record in valid_records
+            )
+            if fingerprint and fingerprint in seen_page_fingerprints:
+                log.warning(
+                    "FreeGameRadar repeated page %s. The API appears to ignore the requested page; "
+                    "continuing with %s unique records already fetched.",
+                    page,
+                    len(all_games),
+                )
+                break
+            if fingerprint:
+                seen_page_fingerprints.add(fingerprint)
+
+            added_this_page = 0
+            for record in valid_records:
+                key = game_key(record)
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                all_games.append(record)
+                added_this_page += 1
+
+            log.info(
+                "Fetched page %s: %s records, %s new (unique total %s)",
+                page,
+                len(records),
+                added_this_page,
+                len(all_games),
+            )
+
             if len(records) < PAGE_SIZE:
                 break
+            if added_this_page == 0:
+                log.warning("Page %s contained no new listings; stopping pagination safely.", page)
+                break
         else:
-            raise RuntimeError(f"Pagination safety limit reached ({MAX_PAGES} pages)")
-    return all_games
+            log.warning("Pagination safety limit reached (%s pages).", MAX_PAGES)
 
+    return all_games
 
 def game_key(game: dict[str, Any]) -> str:
     platform = str(game.get("platform") or "Unknown").strip().casefold()
