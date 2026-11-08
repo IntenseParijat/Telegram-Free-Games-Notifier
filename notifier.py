@@ -609,9 +609,13 @@ async def run_notifier() -> None:
             raise RuntimeError(f"{len(failed_titles)} game(s) could not be delivered and remain pending: {preview}{more}")
 
         if not scan_complete:
-            raise RuntimeError(
-                "FreeGameRadar returned a partial catalogue. New games in the returned pages were sent, "
-                "but later pages were not available to scan."
+            # A repeated page means discovery was incomplete, but does not undo
+            # successful Telegram deliveries. Keep the run successful and make
+            # the limitation visible as a warning so Actions reflects delivery.
+            log.warning(
+                "FreeGameRadar pagination was partial. Successfully delivered %s new listing(s); "
+                "remaining pages will be retried on the next scheduled run.",
+                len(new_games) - len(failed_titles),
             )
     finally:
         await client.disconnect()
