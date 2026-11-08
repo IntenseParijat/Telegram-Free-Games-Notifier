@@ -100,7 +100,12 @@ def game_key(game: dict[str, Any]) -> str:
 
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
-    """Fetch unique listings; return whether pagination reached a normal end."""
+    """Fetch unique listings; return whether pagination reached a normal end.
+
+    The API uses 100-record pages. A short page is the final page, but its
+    repeated-content fingerprint must be checked first so a repeated short
+    page is not incorrectly treated as a successful full scan.
+    """
     all_games: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     seen_page_fingerprints: set[frozenset[str]] = set()
@@ -116,8 +121,8 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
 
             valid_records = [record for record in records if isinstance(record, dict)]
             page_keys = [game_key(record) for record in valid_records]
-            # Treat identical page contents as repetition regardless of order.
             fingerprint = frozenset(page_keys)
+
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
                     "FreeGameRadar repeated page %s. Stopping pagination; %s unique records were collected. "
@@ -145,15 +150,18 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 len(all_games),
             )
 
-            # A short page is a normal final page for this API.
+            # FreeGameRadar returns fewer than PAGE_SIZE records on its final
+            # page. Repetition was already checked, so this is a valid end.
             if len(records) < PAGE_SIZE:
                 scan_complete = True
+                log.info("API returned its final short page at page %s", page)
                 break
+
             if added_this_page == 0:
                 log.warning("Page %s contained no new listings; stopping pagination safely.", page)
                 break
         else:
-            log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.", MAX_PAGES)
+            log.warning("Pagination safety limit reached after %s pages; scan is PARTIAL.")
 
     return all_games, scan_complete
 
