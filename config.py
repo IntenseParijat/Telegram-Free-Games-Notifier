@@ -17,23 +17,24 @@ RUN_INTERVAL_HOURS = 6
 TELEGRAM_CHANNEL_TAG = "@IntenseGaming"
 TELEGRAM_FOOTER = "Powered By [Intense Network](t.me/IntenseNetwork)"
 
-# API response fields. All are enabled by default.
-# Set any option to False to hide that field.
+# Caption fields. Only description, image and platform are rendered.
+# The caption always follows: title, description, platform, claim link,
+# offer expiry, then footer. Category, discount and price metadata stay hidden.
 DISPLAY_FIELDS = {
     "description": True,
     "image": True,
     "platform": True,
-    "category": True,
-    "discount_percent": True,
-    "original_price": True,
-    "final_price": True,
-    "discount_price": True,
-    "currency": True,
-    "start_date": True,
-    "end_date": True,
-    "is_free": True,
-    "game_id": True,
-    "id": True,
-    "created_at": True,
-    "updated_at": True,
+    "category": False,
+    "discount_percent": False,
+    "original_price": False,
+    "final_price": False,
+    "discount_price": False,
+    "currency": False,
+    "start_date": False,
+    "end_date": False,
+    "is_free": False,
+    "game_id": False,
+    "id": False,
+    "created_at": False,
+    "updated_at": False,
 }
