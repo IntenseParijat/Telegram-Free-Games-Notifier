@@ -261,9 +261,9 @@ async def run_notifier() -> None:
         if str(game.get("is_free", "")).strip().lower() in ("1", "true", "yes"):
             current_games[game_key(game)] = game
 
-    seen = load_state()
     first_run = not STATE_PATH.exists()
-    if first_run and not bool(config.SEND_EXISTING_ON_FIRST_RUN):
+    seen = load_state()
+    if first_run and not config.SEND_EXISTING_ON_FIRST_RUN:
         save_state(set(current_games))
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
@@ -282,17 +282,14 @@ async def run_notifier() -> None:
         await client.disconnect()
         raise RuntimeError("TELEGRAM_SESSION is invalid or expired; generate a fresh Telethon StringSession")
 
-    successfully_posted: set[str] = set()
     try:
         for index, (key, game) in enumerate(new_games, start=1):
             title = str(game.get("title") or "Untitled game")
+            sent = False
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     await send_one(client, channel, game)
-                    successfully_posted.add(key)
-                    seen.add(key)
-                    save_state(seen)
-                    log.info("Posted %s (%s/%s)", title, index, len(new_games))
+                    sent = True
                     break
                 except FloodWaitError as exc:
                     await asyncio.sleep(int(exc.seconds) + 1)
@@ -302,11 +299,12 @@ async def run_notifier() -> None:
                     wait = min(2 ** attempt, 60)
                     log.exception("Failed posting %s (attempt %s/%s); retry in %ss", title, attempt, MAX_RETRIES, wait)
                     await asyncio.sleep(wait)
+            if sent:
+                seen.add(key)
+                save_state(seen)
+                log.info("Posted %s (%s/%s)", title, index, len(new_games))
             await asyncio.sleep(1)
     finally:
-        if first_run:
-            # Preserve old listings even if one initial send failed; it is not a future release.
-            save_state(seen | set(current_games))
         await client.disconnect()
 
 
