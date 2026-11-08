@@ -88,13 +88,26 @@ class PaginationTests(unittest.TestCase):
         self.assertFalse(complete)
         self.assertEqual(len(games), 2)
 
-    def test_rejects_page_records_that_are_not_objects(self):
+    def test_ignores_malformed_records_and_continues_to_empty_page(self):
+        valid_page = [{"game_id": "g1", "platform": "Steam"}]
         with patch.object(notifier, "fetch_page", side_effect=[
-            {"success": True, "data": ["not-a-game"]},
+            {"success": True, "data": ["not-a-game", None, 42]},
+            {"success": True, "data": valid_page},
             {"success": True, "data": []},
-        ]):
+        ]) as mocked:
             games, complete = notifier.fetch_all_games("key")
         self.assertTrue(complete)
+        self.assertEqual([game["game_id"] for game in games], ["g1"])
+        self.assertEqual(mocked.call_count, 3)
+
+    def test_repeated_malformed_page_stops_safely(self):
+        malformed = ["not-a-game", None, 42]
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": malformed},
+            {"success": True, "data": malformed},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertFalse(complete)
         self.assertEqual(games, [])
 
 class CaptionTests(unittest.TestCase):
