@@ -73,7 +73,7 @@ All non-secret preferences are in `config.py`. Edit this file on `main` to chang
 - `False`: the first successful scan silently records the current free games as the baseline. Only games added later are posted.
 - `True`: the first successful scan posts all currently free games and records the catalogue to prevent repeats.
 
-The repository already contains `data/seen_games.json`, so changing this option will not cause the first-run branch to execute again. To deliberately reset tracking, delete that file. With first-run sending enabled, the next run will then post the current catalogue.
+The repository tracks `data/seen_games.json` from the start. The checked-in file currently contains an empty `seen` list, so with `SEND_EXISTING_ON_FIRST_RUN = True`, the next run will post the catalogue currently returned by FreeGameRadar. Set it to `False` before the first run if you prefer a silent baseline. After the database has been populated, changing this option does not replay existing games. To deliberately reset tracking, clear the `seen` list in the JSON file.
 
 ### Schedule
 
