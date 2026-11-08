@@ -52,6 +52,16 @@ class PaginationTests(unittest.TestCase):
         self.assertFalse(complete)
         self.assertEqual(len(games), 2)
 
+    def test_repeated_short_page_is_not_misreported_as_complete(self):
+        page = [{"game_id": "g1", "platform": "Steam"}]
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": page},
+            {"success": True, "data": list(reversed(page))},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertFalse(complete)
+        self.assertEqual([game["game_id"] for game in games], ["g1"])
+
     def test_short_page_is_treated_as_final_page(self):
         page = [{"game_id": "g1", "platform": "Steam"}]
         with patch.object(notifier, "fetch_page", side_effect=[
