@@ -473,7 +473,7 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         for field in (
             "type", "offer_type", "offerType", "access_type", "entitlement_type",
             "subscription", "subscription_name", "source", "availability_type",
-            "included_with", "included_in", "is_subscription",
+            "included_with", "included_in", "is_subscription", "description",
         )
     )
     excluded_phrases = (
@@ -499,7 +499,7 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
     # giveaway, even if the source happens to expose an unrelated end date.
     classification = " ".join(
         flatten(game.get(field))
-        for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type")
+        for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type", "description")
     )
     permanent_free_markers = ("free to play", "free to start", "free2play", "f2p", "permanently free")
     if any(_normalised_text(term) in classification for term in permanent_free_markers):
