@@ -57,19 +57,39 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+actions[bot]@users.noreply.github.com"
+
           if [[ ! -f data/seen_games.json ]]; then
             echo "No duplicate-state file exists; notifier did not create one."
             exit 0
           fi
+
           git add data/seen_games.json
           if git diff --cached --quiet; then
             echo "Duplicate state did not change."
             exit 0
           fi
+
           git commit -m "Update notified free games state [skip ci]"
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+
+          # Serialize state updates in this workflow. Refresh from main before
+          # pushing so a concurrent repository update cannot silently overwrite it.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo "State update conflicted with main; refusing to overwrite remote state."
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              echo "Duplicate-tracking state committed to main."
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; refreshing main before retry."
+            sleep "$((attempt * 2))"
+          done
+
+          echo "Could not push duplicate-tracking state after 3 attempts."
+          exit 1
 
       - name: Preserve notifier failure status
         if: always() && steps.notifier.outcome == 'failure'
