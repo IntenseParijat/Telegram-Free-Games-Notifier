@@ -310,7 +310,7 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
         return ""
 
     best_end = -1
-    for match in re.finditer(r"\\.", description):
+    for match in re.finditer(r"\.", description):
         candidate = description[:match.end()]
         if visible_text_length(candidate) <= remaining:
             best_end = match.end()
