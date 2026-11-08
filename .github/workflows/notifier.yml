@@ -23,13 +23,6 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Ensure duplicate state file exists
-        run: |
-          mkdir -p data
-          if [[ ! -f data/seen_games.json ]]; then
-            printf '{\n  "version": 1,\n  "seen": []\n}\n' > data/seen_games.json
-          fi
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
