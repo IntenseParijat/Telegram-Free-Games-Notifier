@@ -73,7 +73,7 @@ All non-secret preferences are in `config.py`. Edit this file on `main` to chang
 - `False`: the first successful scan silently records the current free games as the baseline. Only games added later are posted.
 - `True`: the first successful scan posts all currently free games and records the catalogue to prevent repeats.
 
-The repository tracks `data/seen_games.json` from the start. The checked-in file currently contains an empty `seen` list, so with `SEND_EXISTING_ON_FIRST_RUN = True`, the next run will post the catalogue currently returned by FreeGameRadar. Set it to `False` before the first run if you prefer a silent baseline. After the database has been populated, changing this option does not replay existing games. To deliberately reset tracking, clear the `seen` list in the JSON file.
+The repository tracks `data/seen_games.json` from the start. It contains the previously recorded game IDs so those titles are not reposted. If you deliberately remove or clear the database, the next complete scan follows `SEND_EXISTING_ON_FIRST_RUN`: `True` posts the currently returned catalogue, while `False` silently seeds it as the baseline. After the database has been populated, changing this option does not replay existing games.
 
 ### Schedule
 
@@ -88,7 +88,7 @@ Edit `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER` to customise the final lines. 
 Powered By Intense Network
 ```
 
-The footer is rendered as Telegram HTML. For a linked footer, use Telegram HTML anchor syntax, for example `Powered By <a href="https://t.me/IntenseNetwork">Intense Network</a>`. Plain Markdown link syntax is not interpreted by Telegram.
+The footer setting accepts plain text and Markdown-style links, including the configured shorthand `Powered By [Intense Network](t.me/IntenseNetwork)`. The notifier converts these to Telegram-supported HTML before sending, producing `Powered By Intense Network` with `Intense Network` clickable. Full `https://` links are also supported.
 
 ### Available API fields
 
