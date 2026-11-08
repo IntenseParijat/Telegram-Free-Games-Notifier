@@ -233,35 +233,36 @@ def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
 
 
 def visible_text_length(text: str) -> int:
-    """Count readable text, not HTML tag syntax."""
-    without_tags = re.sub(r"<[^>]+>", "", text)
+    """Count visible text after parsing the HTML tags emitted by this notifier."""
+    without_tags = re.sub(r"<[^>]*>", "", text)
     return len(html.unescape(without_tags))
 
 
 def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
-    """Keep the longest prefix of complete sentences that fits the visible character budget."""
+    """Keep the longest complete-sentence prefix within the rendered Telegram limit."""
     if not description:
         return ""
-    separator = "\n\n" if fixed_caption else ""
-    available = limit - visible_text_length(fixed_caption) - len(separator)
-    if available <= 0:
+
+    separator = "\\n\\n" if fixed_caption else ""
+    remaining = limit - visible_text_length(fixed_caption) - len(separator)
+    if remaining <= 0:
         return ""
 
-    # Description is HTML-escaped before it reaches this function.
-    last_fitting_period = -1
-    for match in re.finditer(r"\.", description):
+    # Description is HTML-escaped before trimming. Only a sentence ending in a
+    # period can be used as the truncation boundary.
+    best_end = -1
+    for match in re.finditer(r"\\.", description):
         candidate = description[:match.end()]
-        if visible_text_length(candidate) <= available:
-            last_fitting_period = match.end()
+        if visible_text_length(candidate) <= remaining:
+            best_end = match.end()
         else:
             break
 
-    if last_fitting_period >= 0:
-        return description[:last_fitting_period].rstrip()
-    if visible_text_length(description) <= available:
+    if best_end >= 0:
+        return description[:best_end].rstrip()
+    if visible_text_length(description) <= remaining:
         return description
     return ""
-
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
     escaped_description = safe_text(description)
