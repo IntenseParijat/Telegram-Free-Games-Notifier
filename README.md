@@ -58,38 +58,43 @@ A StringSession is effectively a login credential for your Telegram account. Any
 
 ## Configuration
 
-All non-secret preferences are in `config.py`. Edit that file on `main` to change how the notifier behaves.
+All non-secret preferences are in `config.py`. Edit this file on `main` to change the notifier.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `SEND_EXISTING_ON_FIRST_RUN` | `False` | Whether to post all currently free listings on the first run. |
-| `RUN_INTERVAL_HOURS` | `6` | Scheduled run interval, from 1 to 24 hours. |
-| `TELEGRAM_CHANNEL_TAG` | `@IntenseGaming` | Optional channel tag shown in the footer. Empty string disables it. |
-| `TELEGRAM_FOOTER` | `Powered By Intense Network` | Optional footer text. Empty string disables it. |
-| `DISPLAY_FIELDS` | See below | Choose which API fields appear in messages. |
+| `SEND_EXISTING_ON_FIRST_RUN` | `False` | Post all existing listings on the first scan, or silently seed the baseline. |
+| `RUN_INTERVAL_HOURS` | `6` | Scheduled interval, from 1 to 24 hours. |
+| `TELEGRAM_CHANNEL_TAG` | `@IntenseGaming` | First footer line; set to `""` to disable. |
+| `TELEGRAM_FOOTER` | `Powered By Intense Network` | Second footer line; set to `""` to disable. |
+| `DISPLAY_FIELDS` | All `True` | Select which API fields appear in messages. |
 
 ### First-run behaviour
 
 - `False`: the first successful scan silently records the current free games as the baseline. Only games added later are posted.
-- `True`: the first successful scan posts all currently free games, then records them so later runs do not repost them.
+- `True`: the first successful scan posts all currently free games and records the catalogue to prevent repeats.
 
-Changing this setting after a baseline has already been created does not reset the database. To deliberately start over, remove `data/seen_games.json` from the repository before the next run. Be aware that this may cause existing games to be posted again when first-run sending is enabled.
+The repository already contains `data/seen_games.json`, so changing this option will not cause the first-run branch to execute again. To deliberately reset tracking, delete that file. With first-run sending enabled, the next run will then post the current catalogue.
 
 ### Schedule
 
-Change `RUN_INTERVAL_HOURS` to an integer from 1 to 24. The workflow applies the configured interval to its GitHub Actions schedule when it runs. GitHub scheduled workflows are best-effort and may start later than the exact cron minute. You can always start a run manually.
+Set `RUN_INTERVAL_HOURS` to an integer from 1 to 24. The workflow updates its cron expression from this setting when you manually run **Actions → Free Game Notifier → Run workflow**. After changing the interval in `config.py`, manually dispatch the workflow once to apply the new schedule. GitHub scheduled runs are best-effort and may be delayed.
 
 ### Footer
 
-Edit `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER` to customise the final lines of each message. Set either value to `""` to omit that line.
+Edit `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER` to customise the final lines. Set either value to `""` to omit that line. The defaults restore the previous footer style:
+
+```text
+@IntenseGaming
+Powered By Intense Network
+```
 
 ### Available API fields
 
-The `DISPLAY_FIELDS` dictionary includes the fields returned by the FreeGameRadar `GET /api/v1/developer/free` response:
+The `DISPLAY_FIELDS` dictionary exposes these FreeGameRadar response fields. Each option is `True` by default; set it to `False` to hide it.
 
 | Config key | API field | Meaning |
 | --- | --- | --- |
-| `description` | `description` | Game description; shortened at the last complete period when needed. |
+| `description` | `description` | Game description; trimmed at the last complete period when needed. |
 | `image` | `image_url` | Attach the API-provided image. |
 | `platform` | `platform` | Store/platform name. |
 | `category` | `category` | API category. |
@@ -106,9 +111,9 @@ The `DISPLAY_FIELDS` dictionary includes the fields returned by the FreeGameRada
 | `created_at` | `created_at` | Listing creation timestamp. |
 | `updated_at` | `updated_at` | Last update timestamp. |
 
-The game title and claim URL are always included as the basic identity and destination link. These are intentionally not configurable because they are essential to a useful game alert.
+The game `title` and `game_url` are always included as the identity and claim destination; they are not configurable because they are essential to a useful alert.
 
-All `DISPLAY_FIELDS` options are `True` by default. Set any field to `False` to hide it. For example, to disable images and the long description:
+For example, to disable images and descriptions while retaining the rest:
 
 ```python
 DISPLAY_FIELDS = {
@@ -133,9 +138,9 @@ DISPLAY_FIELDS = {
 
 ### Description and Telegram limits
 
-Photo captions are kept within 1,000 characters, leaving a margin below Telegram's 1,024-character caption limit for standard accounts. The notifier calculates the remaining space after the title, selected metadata, claim link, and footer. If the description does not fit, it keeps only complete sentences up to the last period that fits. It never cuts the description in the middle of a sentence. If no complete sentence fits, the description is omitted.
+For photo posts, the notifier reserves space for the title, selected metadata, claim link, and footer, then uses the remaining capacity for the description. It keeps only complete description sentences ending in a period when the full description cannot fit. It does not cut a sentence in the middle. Photo captions are capped at 1,000 characters to stay below Telegram's 1,024-character caption maximum.
 
-If an image is disabled or cannot be sent, the notifier sends a text message instead, using Telegram's 4,096-character message limit and the same sentence-boundary trimming rule.
+If images are disabled or the image upload fails, a text message is sent instead. Text messages use the 4,096-character limit and the same sentence-boundary trimming rule.
 
 ## Duplicate protection
 
