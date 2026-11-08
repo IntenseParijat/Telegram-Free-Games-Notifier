@@ -223,11 +223,11 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
-    shortened = trim_description_to_fit(description, fixed, limit)
+    escaped_description = safe_text(description)
+    shortened = trim_description_to_fit(escaped_description, fixed, limit)
     if shortened:
-        return f"{fixed}\n\n{safe_text(shortened)}"
+        return f"{fixed}\n\n{shortened}"
     return fixed
-
 
 async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -> None:
     title = str(game.get("title") or "Untitled game")
