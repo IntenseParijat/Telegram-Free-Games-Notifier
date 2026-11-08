@@ -7,7 +7,7 @@ Keep all credentials in GitHub Actions Secrets, never in this file.
 # First run:
 # True  = post all currently free listings on the first run.
 # False = silently save the current catalogue as the baseline; post future additions only.
-SEND_EXISTING_ON_FIRST_RUN = False
+SEND_EXISTING_ON_FIRST_RUN = True
 
 # How often to run the notifier (1 to 24 hours).
 # GitHub Actions uses this value to sync its schedule on manual workflow dispatch.
@@ -15,7 +15,7 @@ RUN_INTERVAL_HOURS = 6
 
 # Custom Telegram footer. Use "" to hide either line.
 TELEGRAM_CHANNEL_TAG = "@IntenseGaming"
-TELEGRAM_FOOTER = "Powered By Intense Network"
+TELEGRAM_FOOTER = "Powered By [Intense Network](t.me/IntenseNetwork)"
 
 # API response fields. All are enabled by default.
 # Set any option to False to hide that field.
