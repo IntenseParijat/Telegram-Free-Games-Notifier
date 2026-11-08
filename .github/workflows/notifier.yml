@@ -91,8 +91,23 @@ jobs:
           echo "Could not push duplicate-tracking state after 3 attempts."
           exit 1
 
+      - name: Write workflow summary
+        if: always()
+        env:
+          VALIDATION_OUTCOME: ${{ steps.notifier.outcome }}
+        run: |
+          {
+            echo "## Free Game Notifier"
+            echo
+            echo "- Validation: completed before notifier execution."
+            echo "- Notifier outcome: \`$VALIDATION_OUTCOME\`"
+            echo "- Duplicate state: committed when changed."
+            echo
+            echo "See the job logs for API pagination, delivery, and state details."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Preserve notifier failure status
         if: always() && steps.notifier.outcome == 'failure'
         run: |
-          echo "Notifier failed. Successfully posted items were saved; failed items remain pending."
+          echo "Notifier execution failed. Check the notifier log above; successfully posted listings remain recorded, and failed listings remain eligible."
           exit 1
