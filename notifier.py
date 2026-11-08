@@ -312,6 +312,7 @@ async def run_notifier() -> None:
     channel = required_env("TELEGRAM_CHANNEL")
     session_string = required_env("TELEGRAM_SESSION")
 
+    # Do not change state unless the scan has returned a usable catalogue.
     games = fetch_all_games(api_key)
     if not games:
         log.info("API returned an empty catalogue; leaving state untouched")
@@ -322,51 +323,81 @@ async def run_notifier() -> None:
         if str(game.get("is_free", "")).strip().lower() in ("1", "true", "yes"):
             current_games[game_key(game)] = game
 
-    # The first-run switch only applies before the state file has ever been created.
+    # The first-run switch applies only when the state file has never existed.
+    # A tracked empty JSON file is a valid first-run baseline state.
     first_run = not STATE_PATH.exists()
     seen = load_state()
+
     if first_run and not config.SEND_EXISTING_ON_FIRST_RUN:
         save_state(set(current_games))
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
     new_games = [(key, game) for key, game in current_games.items() if key not in seen]
-    log.info("Fetched %s records; free listings: %s; new listings: %s", len(games), len(current_games), len(new_games))
+    log.info(
+        "Fetched %s API records; %s unique free listings; %s not yet posted",
+        len(games),
+        len(current_games),
+        len(new_games),
+    )
+
     if not new_games:
         if first_run:
-            save_state(set(current_games))
+            save_state(set())
         log.info("No new free games")
         return
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
     await client.connect()
-    if not await client.is_user_authorized():
-        await client.disconnect()
-        raise RuntimeError("TELEGRAM_SESSION is invalid or expired; generate a fresh Telethon StringSession")
-
     try:
+        if not await client.is_user_authorized():
+            raise RuntimeError("TELEGRAM_SESSION is invalid or expired; generate a fresh Telethon StringSession")
+
+        failed_titles: list[str] = []
         for index, (key, game) in enumerate(new_games, start=1):
             title = str(game.get("title") or "Untitled game")
-            sent = False
+            posted = False
+
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     await send_one(client, channel, game)
-                    sent = True
+                    posted = True
                     break
                 except FloodWaitError as exc:
-                    await asyncio.sleep(int(exc.seconds) + 1)
+                    wait = max(int(exc.seconds), 1) + 1
+                    log.warning("Telegram flood wait for %s; sleeping %ss", title, wait)
+                    await asyncio.sleep(wait)
                 except Exception:
                     if attempt == MAX_RETRIES:
-                        raise
+                        log.exception("Giving up on %s for this run; it remains eligible for the next run", title)
+                        break
                     wait = min(2 ** attempt, 60)
-                    log.exception("Failed posting %s (attempt %s/%s); retry in %ss", title, attempt, MAX_RETRIES, wait)
+                    log.exception(
+                        "Failed posting %s (attempt %s/%s); retrying in %ss",
+                        title,
+                        attempt,
+                        MAX_RETRIES,
+                        wait,
+                    )
                     await asyncio.sleep(wait)
 
-            if sent:
+            if posted:
+                # Persist after each confirmed Telegram send, so a later failure
+                # does not cause already delivered games to be reposted.
                 seen.add(key)
                 save_state(seen)
                 log.info("Posted %s (%s/%s)", title, index, len(new_games))
+            else:
+                failed_titles.append(title)
+
             await asyncio.sleep(1)
+
+        if failed_titles:
+            preview = ", ".join(failed_titles[:10])
+            more = f" (and {len(failed_titles) - 10} more)" if len(failed_titles) > 10 else ""
+            raise RuntimeError(
+                f"{len(failed_titles)} game(s) could not be delivered and remain pending: {preview}{more}"
+            )
     finally:
         await client.disconnect()
 
