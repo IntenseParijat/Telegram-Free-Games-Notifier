@@ -9,8 +9,9 @@ Keep all credentials in GitHub Actions Secrets, never in this file.
 # False = silently save the current catalogue as the baseline; post future additions only.
 SEND_EXISTING_ON_FIRST_RUN = True
 
-# How often to run the notifier (1 to 24 hours).
-# GitHub Actions uses this value to sync its schedule on manual workflow dispatch.
+# Actual GitHub Actions schedule is configured in .github/workflows/notifier.yml.
+# GitHub scheduled workflows use a cron expression; edit that file to change it.
+# This value is informational only and is retained for compatibility.
 RUN_INTERVAL_HOURS = 6
 
 # Custom Telegram footer. Use "" to hide either line.
