@@ -165,6 +165,50 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(notifier.valid_http_url("https://example.com/game"), "https://example.com/game")
 
 
+
+class DeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_photo_send_network_error_does_not_fallback_to_text(self):
+        class Client:
+            def __init__(self):
+                self.photo_calls = 0
+                self.text_calls = 0
+            async def send_file(self, *args, **kwargs):
+                self.photo_calls += 1
+                raise OSError("connection lost after send")
+            async def send_message(self, *args, **kwargs):
+                self.text_calls += 1
+
+        client = Client()
+        game = {"title": "Test game", "image_url": "https://example.com/image.jpg"}
+        with patch.object(notifier, "enabled", side_effect=lambda field: field == "image"), patch.object(
+            notifier, "compose_message", return_value="<b>Test game</b>"
+        ), patch.object(notifier, "valid_http_url", return_value="https://example.com/image.jpg"):
+            with self.assertRaises(OSError):
+                await notifier.send_one(client, "@channel", game)
+        self.assertEqual(client.photo_calls, 1)
+        self.assertEqual(client.text_calls, 0)
+
+    async def test_photo_payload_rejection_falls_back_to_text(self):
+        class Client:
+            def __init__(self):
+                self.photo_calls = 0
+                self.text_calls = 0
+            async def send_file(self, *args, **kwargs):
+                self.photo_calls += 1
+                raise ValueError("invalid media")
+            async def send_message(self, *args, **kwargs):
+                self.text_calls += 1
+
+        client = Client()
+        game = {"title": "Test game", "image_url": "https://example.com/image.jpg"}
+        with patch.object(notifier, "enabled", side_effect=lambda field: field == "image"), patch.object(
+            notifier, "compose_message", return_value="<b>Test game</b>"
+        ), patch.object(notifier, "valid_http_url", return_value="https://example.com/image.jpg"):
+            await notifier.send_one(client, "@channel", game)
+        self.assertEqual(client.photo_calls, 1)
+        self.assertEqual(client.text_calls, 1)
+
+
 class StateTests(unittest.TestCase):
     def test_state_file_round_trip(self):
         with tempfile.TemporaryDirectory() as folder:
