@@ -192,7 +192,7 @@ def enabled(field: str) -> bool:
 def _format_footer_html_links(value: str) -> str:
     """Convert supported user-friendly footer links into Telegram HTML."""
     # Markdown links, including a prefix such as "Powered By ".
-    pattern = re.compile(r"\\[([^\\]]+)\\]\\((https?://[^\\s)]+|t\\.me/[^\\s)]+)\\)")
+    pattern = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+|t\.me/[^\s)]+)\)")
     parts: list[str] = []
     cursor = 0
     for match in pattern.finditer(value):
