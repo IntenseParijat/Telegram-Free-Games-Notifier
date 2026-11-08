@@ -424,7 +424,12 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
 
     if not isinstance(game, dict):
         return False
-    if str(game.get("is_free", "")).strip().casefold() not in {"1", "true", "yes", "y"}:
+    is_free_value = game.get("is_free")
+    if isinstance(is_free_value, bool):
+        is_free = is_free_value
+    else:
+        is_free = str(is_free_value or "").strip().casefold() in {"1", "true", "yes", "y"}
+    if not is_free:
         return False
 
     end_value = (
@@ -467,20 +472,28 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         flatten(game.get(field))
         for field in (
             "type", "offer_type", "offerType", "access_type", "entitlement_type",
-            "subscription", "subscription_name", "source", "category",
-            "platform", "description", "title", "availability_type",
+            "subscription", "subscription_name", "source", "availability_type",
             "included_with", "included_in", "is_subscription",
         )
     )
     excluded_phrases = (
         "game pass", "xbox game pass", "pc game pass", "playstation plus",
         "ps plus", "subscription", "included with", "included in pass",
-        "game catalog", "game catalogue", "permanently free", "free to play",
-        "free to start", "free2play", "f2p",
+        "game catalog", "game catalogue", "permanently free",
     )
     if any(_normalised_text(term) in searchable for term in excluded_phrases):
         return False
     if game.get("is_subscription") is True or game.get("subscription_included") is True:
+        return False
+
+    # A record explicitly marked as a permanently/free-to-play title is not a
+    # giveaway, even if the source happens to expose an unrelated end date.
+    classification = " ".join(
+        flatten(game.get(field))
+        for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type")
+    )
+    permanent_free_markers = ("free to play", "free to start", "free2play", "f2p", "permanently free")
+    if any(_normalised_text(term) in classification for term in permanent_free_markers):
         return False
 
     offer_type = _normalised_text(game.get("type") or game.get("offer_type") or game.get("offerType"))
