@@ -138,9 +138,9 @@ DISPLAY_FIELDS = {
 
 ### Description and Telegram limits
 
-For photo posts, the notifier reserves space for the title, selected metadata, claim link, and footer, then uses the remaining capacity for the description. It keeps only complete description sentences ending in a period when the full description cannot fit. It does not cut a sentence in the middle. Photo captions are capped at 1,000 characters to stay below Telegram's 1,024-character caption maximum.
+For photo posts, the notifier reserves space for the title, selected metadata, claim link, and footer, then uses the remaining capacity for the description. It keeps only complete description sentences ending in a period when the full description cannot fit. It does not cut a sentence in the middle. Photo captions are capped at 1,000 visible characters to stay below Telegram's 1,024-character caption maximum. The notifier calculates the available space after all other enabled message fields and keeps the longest sequence of complete description sentences ending in periods that fits. It never truncates a sentence. If even the first sentence cannot fit, the description is omitted. HTML tag syntax is excluded when measuring visible text.
 
-If images are disabled or the image upload fails, a text message is sent instead. Text messages use the 4,096-character limit and the same sentence-boundary trimming rule.
+If images are disabled or the image upload fails, a text message is sent instead. Text messages use Telegram's 4,096-character limit and the same sentence-boundary trimming rule.
 
 ## Duplicate protection
 
