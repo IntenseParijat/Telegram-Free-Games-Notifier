@@ -114,7 +114,6 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
         for page in range(1, MAX_PAGES + 1):
             payload = fetch_page(session, page, api_key)
             records = payload["data"]
-
             if not records:
                 scan_complete = True
                 log.info("API pagination ended normally at empty page %s", page)
@@ -123,6 +122,10 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             valid_records = [record for record in records if isinstance(record, dict)]
             page_keys = [game_key(record) for record in valid_records]
             fingerprint = frozenset(page_keys)
+
+            if records and not valid_records:
+                log.warning("Page %s contained no valid game objects; stopping with a partial scan.", page)
+                break
 
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
