@@ -114,6 +114,98 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual([game["game_id"] for game in games], ["g1"])
         self.assertEqual(mocked.call_count, 4)
 
+class OfferEligibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.now = notifier._parse_offer_datetime("2026-11-09T12:00:00Z")
+
+    def base_offer(self):
+        return {
+            "title": "Limited giveaway",
+            "platform": "Epic Games",
+            "is_free": True,
+            "original_price": "19.99",
+            "final_price": "0",
+            "end_date": "2026-11-15T23:59:59Z",
+            "description": "A normally paid title, temporarily free to claim.",
+        }
+
+    def test_accepts_active_paid_game_giveaway(self):
+        self.assertTrue(notifier.is_eligible_temporary_offer(self.base_offer(), now=self.now))
+
+    def test_rejects_permanently_free_game_without_expiry(self):
+        game = self.base_offer()
+        game["end_date"] = None
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_expired_offer(self):
+        game = self.base_offer()
+        game["end_date"] = "2026-11-08T23:59:59Z"
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_permanent_free_to_play_record(self):
+        game = self.base_offer()
+        game["description"] = "Free-to-play forever."
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_game_pass_catalogue_record(self):
+        game = self.base_offer()
+        game["description"] = "Included with Xbox Game Pass."
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_subscription_source(self):
+        game = self.base_offer()
+        game["source"] = "Xbox Game Pass subscription catalogue"
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_zero_original_price(self):
+        game = self.base_offer()
+        game["original_price"] = "0"
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+
+class CaptionOrderTests(unittest.TestCase):
+    def test_caption_has_requested_order_and_blank_line_spacing(self):
+        game = {
+            "title": "Test Game",
+            "description": "First sentence. Second sentence.",
+            "platform": "Epic Games",
+            "game_url": "https://example.com/claim",
+            "end_date": "2026-11-15",
+        }
+        with patch.object(notifier, "enabled", side_effect=lambda field: field in {"description", "platform"}), patch.object(
+            notifier, "footer_lines", return_value=["@Channel", "Powered By Intense Network"]
+        ):
+            message = notifier.compose_message(game, 1000)
+
+        expected = (
+            "<b>Test Game</b>\\n\\n"
+            "First sentence. Second sentence.\\n\\n"
+            "🎮 <b>Platform:</b> Epic Games\\n\\n"
+            '🔗 <a href="https://example.com/claim">Get the game</a>\\n\\n'
+            "⏳ <b>Free until:</b> 2026-11-15\\n\\n"
+            "@Channel\\nPowered By Intense Network"
+        )
+        self.assertEqual(message, expected)
+
+    def test_category_price_discount_and_ids_are_not_rendered(self):
+        game = {
+            "title": "Test Game",
+            "platform": "Xbox",
+            "category": "f2p",
+            "discount_percent": 100,
+            "original_price": "10",
+            "final_price": "0",
+            "discount_price": "free",
+            "game_id": "abc",
+            "id": "123",
+            "end_date": "2026-11-15",
+        }
+        with patch.object(notifier, "enabled", side_effect=lambda field: field in {"platform"}):
+            message = notifier.compose_message(game, 1000)
+        for unwanted in ("Category", "Discount:", "Price:", "Discount price", "Game ID", "Listing ID"):
+            self.assertNotIn(unwanted, message)
+
+
 class CaptionTests(unittest.TestCase):
     def test_sentence_boundary_trimming_matches_requested_example(self):
         fixed = "X" * 98
@@ -204,6 +296,24 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
                 await notifier.send_one(client, "@channel", game)
         self.assertEqual(client.photo_calls, 1)
         self.assertEqual(client.text_calls, 0)
+
+    async def test_photo_is_forced_to_compressed_photo_mode(self):
+        class Client:
+            def __init__(self):
+                self.kwargs = None
+            async def send_file(self, *args, **kwargs):
+                self.kwargs = kwargs
+            async def send_message(self, *args, **kwargs):
+                raise AssertionError("text fallback should not be used")
+
+        client = Client()
+        game = {"title": "Test game", "image_url": "https://example.com/image.jpg"}
+        with patch.object(notifier, "enabled", side_effect=lambda field: field == "image"), patch.object(
+            notifier, "compose_message", return_value="<b>Test game</b>"
+        ), patch.object(notifier, "valid_http_url", return_value="https://example.com/image.jpg"):
+            await notifier.send_one(client, "@channel", game)
+        self.assertIsNotNone(client.kwargs)
+        self.assertIs(client.kwargs.get("force_document"), False)
 
     async def test_photo_payload_rejection_falls_back_to_text(self):
         class Client:
