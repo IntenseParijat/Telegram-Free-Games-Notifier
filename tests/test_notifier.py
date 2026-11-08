@@ -120,6 +120,11 @@ class FormattingTests(unittest.TestCase):
             'Powered By <a href="https://t.me/IntenseNetwork">Intense Network</a>',
         )
 
+    def test_footer_link_without_space_is_not_padded(self):
+        result = notifier.format_footer_line("Join[Network](t.me/IntenseNetwork)")
+        self.assertEqual(result, 'Join<a href="https://t.me/IntenseNetwork">Network</a>')
+
+
     def test_multiple_links_and_plain_text_are_preserved(self):
         result = notifier.format_footer_line(
             "Join [Network](t.me/IntenseNetwork) or [News](https://t.me/News) now"
