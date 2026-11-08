@@ -145,8 +145,10 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 len(all_games),
             )
 
-            # Empty page is the API's only reliable completion signal.
-            # Do not stop merely because a short page was returned.
+            # A short page is a normal final page for this API.
+            if len(records) < PAGE_SIZE:
+                scan_complete = True
+                break
             if added_this_page == 0:
                 log.warning("Page %s contained no new listings; stopping pagination safely.", page)
                 break
