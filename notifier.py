@@ -513,7 +513,11 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
 
 async def run_notifier() -> None:
     api_key = os.getenv("FREEGAMERADAR_API_KEY", "").strip() or None
-    api_id = int(required_env("TELEGRAM_API_ID"))
+    api_id_text = required_env("TELEGRAM_API_ID")
+    try:
+        api_id = int(api_id_text)
+    except ValueError as exc:
+        raise RuntimeError("TELEGRAM_API_ID must be a numeric Telegram API ID") from exc
     api_hash = required_env("TELEGRAM_API_HASH")
     channel = required_env("TELEGRAM_CHANNEL")
     session_string = required_env("TELEGRAM_SESSION")
