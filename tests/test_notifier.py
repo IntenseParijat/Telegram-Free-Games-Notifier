@@ -52,6 +52,18 @@ class PaginationTests(unittest.TestCase):
         self.assertFalse(complete)
         self.assertEqual(len(games), 2)
 
+    def test_short_page_can_be_followed_by_more_pages(self):
+        page1 = [{"game_id": "g1", "platform": "Steam"}]
+        page2 = [{"game_id": "g2", "platform": "Epic"}]
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": page1},
+            {"success": True, "data": page2},
+            {"success": True, "data": []},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertTrue(complete)
+        self.assertEqual({game["game_id"] for game in games}, {"g1", "g2"})
+
 
 class CaptionTests(unittest.TestCase):
     def test_sentence_boundary_trimming_matches_requested_example(self):
