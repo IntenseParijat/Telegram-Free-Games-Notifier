@@ -36,8 +36,9 @@ jobs:
 
       - name: Validate configuration and notifier
         run: |
-          python -m py_compile notifier.py config.py
-          python -m unittest discover -s tests -v
+          set -euo pipefail
+          python -m py_compile notifier.py config.py test_notifier.py
+          python -m unittest -v test_notifier
 
       - name: Run notifier
         id: notifier
