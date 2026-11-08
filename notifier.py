@@ -369,10 +369,15 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
         if visible_text_length(caption) > MAX_PHOTO_CAPTION:
             raise ValueError(f"Photo caption for {title} exceeds {MAX_PHOTO_CAPTION} Telegram UTF-16 characters")
         try:
+            # Only fall back when the photo operation clearly failed before
+            # delivery. Retrying as text after an ambiguous network error can
+            # create a duplicate post if Telegram accepted the original upload.
             await client.send_file(channel, image_url, caption=caption, parse_mode="html")
             return
-        except Exception as exc:
-            log.warning("Image send failed for %s (%s); falling back to text", title, exc)
+        except FloodWaitError:
+            raise
+        except (ValueError, TypeError) as exc:
+            log.warning("Photo payload rejected for %s (%s); falling back to text", title, exc)
 
     message = compose_message(game, MAX_TEXT_MESSAGE)
     if visible_text_length(message) > MAX_TEXT_MESSAGE:
