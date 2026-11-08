@@ -1,5 +1,7 @@
+import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 import notifier
 
@@ -15,9 +17,9 @@ class PaginationTests(unittest.TestCase):
             {"success": True, "data": first},
         ]):
             games = notifier.fetch_all_games("key")
-        self.assertEqual([g["game_id"] for g in games], ["g1", "g2"])
+        self.assertEqual([game["game_id"] for game in games], ["g1", "g2"])
 
-    def test_duplicate_ids_across_pages_are_removed(self):
+    def test_duplicate_game_keys_across_pages_are_removed(self):
         page1 = [
             {"game_id": "g1", "platform": "Steam", "title": "One"},
             {"game_id": "g2", "platform": "Epic", "title": "Two"},
@@ -32,7 +34,7 @@ class PaginationTests(unittest.TestCase):
             {"success": True, "data": []},
         ]):
             games = notifier.fetch_all_games("key")
-        self.assertEqual({g["game_id"] for g in games}, {"g1", "g2", "g3"})
+        self.assertEqual({game["game_id"] for game in games}, {"g1", "g2", "g3"})
 
 
 class CaptionTests(unittest.TestCase):
@@ -58,35 +60,55 @@ class CaptionTests(unittest.TestCase):
         self.assertEqual(result, "A &amp; B.")
 
     def test_no_partial_sentence_is_returned(self):
-        self.assertEqual(notifier.trim_description_to_fit("No period here", "X" * 99, 100), "")
+        self.assertEqual(
+            notifier.trim_description_to_fit("No period here", "X" * 99, 100),
+            "",
+        )
 
 
 class FormattingTests(unittest.TestCase):
     def test_markdown_style_footer_link_converts_to_telegram_html(self):
-        result = notifier.format_footer_line("Powered By [Intense Network](https://t.me/IntenseNetwork)")
+        result = notifier.format_footer_line(
+            "Powered By [Intense Network](https://t.me/IntenseNetwork)"
+        )
         self.assertEqual(
             result,
             '<a href="https://t.me/IntenseNetwork">Intense Network</a>',
         )
 
-    def test_invalid_game_url_is_rejected(self):
+    def test_legacy_tme_footer_converts_to_telegram_html(self):
+        result = notifier.format_footer_line("Powered By [Intense Network](t.me/IntenseNetwork)")
+        self.assertEqual(
+            result,
+            '<a href="https://t.me/IntenseNetwork">Intense Network</a>',
+        )
+
+    def test_invalid_game_urls_are_rejected(self):
         self.assertIsNone(notifier.valid_http_url("javascript:alert(1)"))
         self.assertIsNone(notifier.valid_http_url("not a url"))
-        self.assertEqual(notifier.valid_http_url("https://example.com/game"), "https://example.com/game")
+        self.assertEqual(
+            notifier.valid_http_url("https://example.com/game"),
+            "https://example.com/game",
+        )
 
 
 class StateTests(unittest.TestCase):
     def test_state_file_round_trip(self):
-        with patch.object(notifier, "STATE_PATH") as state_path:
-            state_path.exists.return_value = False
-            state_path.parent.mkdir = MagicMock()
-            state_path.with_suffix.return_value = MagicMock()
-            temp = state_path.with_suffix.return_value
-            temp.write_text = MagicMock()
-            temp.replace = MagicMock()
-            # save_state should not silently prune identifiers.
-            notifier.save_state({"steam:one", "epic:two"})
-            self.assertTrue(temp.write_text.called)
+        with tempfile.TemporaryDirectory() as folder:
+            state_path = Path(folder) / "seen_games.json"
+            with patch.object(notifier, "STATE_PATH", state_path):
+                notifier.save_state({"steam:one", "epic:two"})
+                self.assertEqual(
+                    notifier.load_state(),
+                    {"steam:one", "epic:two"},
+                )
+
+    def test_state_limit_does_not_silently_discard_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state_path = Path(folder) / "seen_games.json"
+            with patch.object(notifier, "STATE_PATH", state_path), patch.object(notifier, "MAX_STATE_KEYS", 1):
+                with self.assertRaises(RuntimeError):
+                    notifier.save_state({"steam:one", "epic:two"})
 
 
 if __name__ == "__main__":
