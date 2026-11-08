@@ -291,7 +291,7 @@ def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
     blocks: list[str] = []
     platform = formatted_optional_fields(game)
     if platform:
-        blocks.append("\\n".join(platform))
+        blocks.append("\n".join(platform))
 
     game_url = valid_http_url(game.get("game_url"))
     if game_url:
@@ -311,13 +311,13 @@ def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
 
     footer = footer_lines()
     if footer:
-        blocks.append("\\n".join(footer))
-    return title, description, "\\n\\n".join(blocks)
+        blocks.append("\n".join(footer))
+    return title, description, "\n\n".join(blocks)
 
 
 def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
     title, description, trailing = _caption_blocks(game)
-    fixed = title + ("\\n\\n" + trailing if trailing else "")
+    fixed = title + ("\n\n" + trailing if trailing else "")
     return fixed, description
 
 
@@ -332,12 +332,12 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     """Keep complete sentences within the rendered character budget."""
     if not description:
         return ""
-    separator = "\\n\\n" if fixed_caption else ""
+    separator = "\n\n" if fixed_caption else ""
     remaining = limit - visible_text_length(fixed_caption) - visible_text_length(separator)
     if remaining <= 0:
         return ""
     best_end = -1
-    for match in re.finditer(r"\\.", description):
+    for match in re.finditer(r"\.", description):
         candidate = description[:match.end()]
         if visible_text_length(candidate) <= remaining:
             best_end = match.end()
@@ -352,12 +352,12 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
     title, description, trailing = _caption_blocks(game)
-    fixed = title + ("\\n\\n" + trailing if trailing else "")
+    fixed = title + ("\n\n" + trailing if trailing else "")
     shortened = trim_description_to_fit(description, fixed, limit)
     if shortened:
-        result = title + "\\n\\n" + shortened
+        result = title + "\n\n" + shortened
         if trailing:
-            result += "\\n\\n" + trailing
+            result += "\n\n" + trailing
         return result
     return fixed
 
