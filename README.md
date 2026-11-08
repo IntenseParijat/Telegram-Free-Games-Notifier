@@ -154,7 +154,7 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## API pagination and recovery
 
-The notifier requests pages of 100 records. It removes duplicate listings across pages and stops with a partial-scan warning if FreeGameRadar repeats a page (including the same records in a different order). Short pages are accepted as a normal final page, while an empty page is also accepted as the end marker. Unique records already returned can still be delivered when a repeated page prevents a full scan.
+The notifier requests pages of up to 100 records. It removes duplicate listings across pages and stops with a partial-scan warning if FreeGameRadar repeats a page (including the same records in a different order). It does not assume a short page is the last page: pagination continues until the API returns an empty page, a repeated page, or the safety page limit is reached. Unique records already returned can still be delivered when a repeated page prevents a full scan.
 
 A partial scan never initializes a first-run baseline. That prevents the notifier from treating the first page as the complete catalogue and permanently suppressing games it could not see. If the database already exists, successfully posted titles are recorded normally; failed Telegram deliveries remain unseen and eligible for the next run.
 
