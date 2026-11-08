@@ -154,7 +154,7 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## API pagination and recovery
 
-The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging instead of treating the whole run as fatal. It then processes the unique records already collected. This prevents the same 100 records from breaking every run, but it cannot notify games hidden beyond a page the API does not return. The API's pagination behaviour remains an external limitation.
+The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging. Unique records already returned can still be processed, but the scan is marked **partial** and the GitHub Actions job remains failed. It does not initialize a first-run baseline from a partial scan. This avoids both a repeated-page crash and falsely claiming that games on later pages were checked. The API must return valid subsequent pages before a run can be considered complete.
 
 If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. Successful Telegram deliveries are saved to the database immediately. A game whose delivery fails remains unseen and is eligible for the next run. The workflow commits the state even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
 
