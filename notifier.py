@@ -407,7 +407,11 @@ async def run_notifier() -> None:
     first_run = not STATE_PATH.exists()
     seen = load_state()
 
-    if first_run and not config.SEND_EXISTING_ON_FIRST_RUN and scan_complete:
+    if first_run and not config.SEND_EXISTING_ON_FIRST_RUN:
+        if not scan_complete:
+            raise RuntimeError(
+                "First-run catalogue scan was partial; no baseline was written. Retry on the next run."
+            )
         save_state(set(current_games))
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
