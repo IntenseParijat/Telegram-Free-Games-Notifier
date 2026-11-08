@@ -233,8 +233,38 @@ def formatted_optional_fields(game: dict[str, Any]) -> list[str]:
 
 def valid_http_url(value: Any) -> str | None:
     url = str(value or "").strip()
-    return url if url.startswith(("https://", "http://")) else None
+    if not url:
+        return None
+    parsed = requests.utils.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return url
 
+
+def telegram_link(url: str, label: str) -> str:
+    return f'<a href="{html.escape(url, quote=True)}">{safe_text(label)}</a>'
+
+
+def format_footer_line(value: str) -> str:
+    """Support plain text or Markdown-style [label](url) footer links."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    match = re.fullmatch(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", value)
+    if match:
+        return telegram_link(match.group(2), match.group(1))
+    # Convert a simple channel link such as t.me/IntenseNetwork into https.
+    match = re.fullmatch(r"([^\s]+)\s*\(t\.me/([^)]+)\)", value)
+    if match:
+        label = match.group(1).strip()
+        return telegram_link(f"https://t.me/{match.group(2)}", label)
+    return safe_text(value)
+
+
+def normalize_telegram_html(text: str) -> str:
+    """Turn config-friendly Markdown-style footer syntax into Telegram HTML."""
+    pattern = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
+    return pattern.sub(lambda m: telegram_link(m.group(2), m.group(1)), text)
 
 def fixed_caption_parts(game: dict[str, Any]) -> tuple[str, str]:
     lines = [f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"]
