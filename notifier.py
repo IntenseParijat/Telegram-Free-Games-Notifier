@@ -255,15 +255,15 @@ def visible_text_length(text: str) -> int:
 
 
 def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
-    """Keep the longest complete-sentence prefix within the rendered Telegram limit."""
+    """Keep complete sentences within the available rendered character budget."""
     if not description:
         return ""
+
     separator = "\n\n" if fixed_caption else ""
     remaining = limit - visible_text_length(fixed_caption) - len(separator)
     if remaining <= 0:
         return ""
 
-    # Description is HTML-escaped before trimming.
     best_end = -1
     for match in re.finditer(r"\.", description):
         candidate = description[:match.end()]
@@ -274,9 +274,12 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
 
     if best_end >= 0:
         return description[:best_end].rstrip()
+
     if visible_text_length(description) <= remaining:
         return description
+
     return ""
+
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
     escaped_description = safe_text(description)
