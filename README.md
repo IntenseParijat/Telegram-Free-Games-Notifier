@@ -32,31 +32,20 @@ A StringSession lets the GitHub Actions runner sign in as your Telegram account 
 
 ### 2. Generate the StringSession on your Windows PC
 
-Install Python if needed, then open Command Prompt or PowerShell and run:
+Install Python, then open Command Prompt or PowerShell and run:
 
 ```powershell
-python -m pip install --upgrade pip
-python -m pip install --upgrade Telethon
+py -m pip install --U pip
+py -m pip install --U Telethon
 ```
 
-Create a file named `generate_session.py` with the following content. Replace the two placeholder values with your API ID and API hash:
+Download [generate_string_session.py](https://github.com/IntenseParijat/Telegram-Free-Games-Notifier/blob/main/generate_string_session.py)
 
-```python
-from telethon.sync import TelegramClient
-from telethon.sessions import StringSession
+Run it in any way
 
-API_ID = 123456  # Replace with your numeric api_id
-API_HASH = "YOUR_API_HASH"  # Replace with your api_hash
-
-with TelegramClient(StringSession(), API_ID, API_HASH) as client:
-    print("\\nYour TELEGRAM_SESSION value is:\\n")
-    print(client.session.save())
-```
-
-Run it:
-
+Example:
 ```powershell
-python generate_session.py
+python generate_string_session.py
 ```
 
 Telethon will ask for your phone number (including country code), the login code sent by Telegram, and your two-step verification password if you have one enabled. Once login succeeds, the script prints a long session string.
