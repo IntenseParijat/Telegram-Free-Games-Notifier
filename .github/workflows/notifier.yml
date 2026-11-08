@@ -2,7 +2,7 @@ name: Free Game Notifier
 
 on:
   schedule:
-    # The cron is kept aligned with config.py by the setup workflow.
+    # Default fallback schedule. Manual dispatch syncs this from config.py.
     - cron: "17 */6 * * *"
   workflow_dispatch:
 
@@ -31,33 +31,34 @@ jobs:
           import re
           from pathlib import Path
 
-          config = ast.parse(Path("config.py").read_text(encoding="utf-8"))
-          hours = None
-          for node in config.body:
+          config_tree = ast.parse(Path("config.py").read_text(encoding="utf-8"))
+          interval = None
+          for node in config_tree.body:
               if isinstance(node, ast.Assign) and any(
                   isinstance(target, ast.Name) and target.id == "RUN_INTERVAL_HOURS"
                   for target in node.targets
               ):
-                  hours = ast.literal_eval(node.value)
+                  interval = ast.literal_eval(node.value)
                   break
-          if type(hours) is not int or not 1 <= hours <= 24:
-              raise SystemExit("RUN_INTERVAL_HOURS must be an integer from 1 to 24")
+
+          if type(interval) is not int or not 1 <= interval <= 24:
+              raise SystemExit("RUN_INTERVAL_HOURS in config.py must be an integer from 1 to 24")
 
           path = Path(".github/workflows/notifier.yml")
           source = path.read_text(encoding="utf-8")
           updated = re.sub(
               r'(?m)(^\s*- cron:\s*)["\'][^"\']+["\']',
-              lambda match: match.group(1) + f'"17 */{hours} * * *"',
+              lambda match: match.group(1) + f'"17 */{interval} * * *"',
               source,
               count=1,
           )
           if updated == source:
-              print("Workflow cron already matches config.py or no update was required.")
+              print("Workflow schedule already matches config.py.")
           else:
               path.write_text(updated, encoding="utf-8")
-              print(f"Updated cron to every {hours} hours.")
+              print(f"Updated scheduled trigger to every {interval} hours.")
           PY
-      - name: Commit changed schedule
+      - name: Commit updated schedule
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
