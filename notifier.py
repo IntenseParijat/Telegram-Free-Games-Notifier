@@ -298,9 +298,13 @@ def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
         blocks.append(f'🔗 <a href="{html.escape(game_url, quote=True)}">Get the game</a>')
 
     end_date = (
-        game.get("end_date") or game.get("offer_end_date")
-        or game.get("free_until") or game.get("claim_end_date")
-        or game.get("promotion_end_date")
+        game.get("end_date") or game.get("endDate")
+        or game.get("offer_end_date") or game.get("offerEndDate")
+        or game.get("free_until") or game.get("freeUntil")
+        or game.get("claim_end_date") or game.get("claimEndDate")
+        or game.get("promotion_end_date") or game.get("promotionEndDate")
+        or game.get("offer_expires_at") or game.get("expires_at")
+        or game.get("ends_at")
     )
     if end_date:
         blocks.append(f"⏳ <b>Free until:</b> {safe_text(end_date)}")
@@ -440,21 +444,25 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         return False
 
     # Subscription/catalogue availability is not a free-to-keep giveaway.
-    searchable = " ".join(
+    searchable_values = [
         _normalised_text(game.get(field))
         for field in (
             "type", "offer_type", "access_type", "entitlement_type",
             "subscription", "subscription_name", "source", "category",
-            "platform", "description", "title",
+            "platform", "description", "title", "availability_type",
         )
-    )
-    excluded = (
+    ]
+    excluded_phrases = (
         "game pass", "xbox game pass", "pc game pass", "playstation plus",
         "ps plus", "subscription", "included with", "included in pass",
         "game catalog", "game catalogue", "permanently free", "free to play",
         "free to start", "free2play", "f2p",
     )
-    if any(_normalised_text(term) in searchable for term in excluded):
+    if any(
+        _normalised_text(term) in value
+        for value in searchable_values
+        for term in excluded_phrases
+    ):
         return False
 
     offer_type = _normalised_text(game.get("type") or game.get("offer_type"))
