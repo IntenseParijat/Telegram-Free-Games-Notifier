@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
 
-# Prevent concurrent scans from racing on Telegram sends or the JSON database.
 concurrency:
   group: free-game-notifier-main
   cancel-in-progress: false
@@ -32,6 +31,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade -r requirements.txt
+      - name: Validate configuration and notifier
+        run: |
+          python -m py_compile notifier.py config.py
+          python -m unittest discover -s tests -v
 
       - name: Run notifier
         id: notifier
@@ -47,16 +50,22 @@ jobs:
       - name: Commit duplicate-tracking state
         if: always()
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+actions[bot]@users.noreply.github.com"
           git add data/seen_games.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Update notified free games state [skip ci]"
-            git push
+          if git diff --cached --quiet; then
+            echo "Duplicate state did not change."
+            exit 0
           fi
+
+          git commit -m "Update notified free games state [skip ci]"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
 
       - name: Preserve notifier failure status
         if: always() && steps.notifier.outcome == 'failure'
         run: |
-          echo "Notifier failed. See the Run notifier step above; successfully posted items were saved and failed items remain pending."
+          echo "Notifier failed. Successfully posted items were saved; failed items remain pending."
           exit 1
