@@ -50,28 +50,44 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
     headers = {"Accept": "application/json", "User-Agent": "Telegram-Free-Games-Notifier/1.0"}
     if api_key:
         headers["X-API-Key"] = api_key
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = session.get(API_URL, headers=headers, params={"page": page, "limit": PAGE_SIZE}, timeout=REQUEST_TIMEOUT)
+            response = session.get(
+                API_URL,
+                headers=headers,
+                params={"page": page, "limit": PAGE_SIZE},
+                timeout=REQUEST_TIMEOUT,
+            )
+
             if response.status_code == 429 or response.status_code >= 500:
-                retry_after = response.headers.get("Retry-After")
-                wait = min(int(retry_after), 120) if retry_after and retry_after.isdigit() else min(2 ** attempt, 60)
+                retry_after = response.headers.get("Retry-After", "")
+                try:
+                    wait = min(max(int(retry_after), 1), 120) if retry_after else min(2 ** attempt, 60)
+                except ValueError:
+                    wait = min(2 ** attempt, 60)
+
                 if attempt == MAX_RETRIES:
                     response.raise_for_status()
-                log.warning("API returned %s on page %s; retrying in %ss", response.status_code, page, wait)
+                log.warning("API returned HTTP %s on page %s; retrying in %ss", response.status_code, page, wait)
                 time.sleep(wait)
                 continue
+
             response.raise_for_status()
             payload = response.json()
-            if not isinstance(payload, dict) or payload.get("success") is not True or not isinstance(payload.get("data"), list):
-                raise RuntimeError(f"Unexpected API response on page {page}")
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"Unexpected non-object API response on page {page}")
+            if payload.get("success") is not True or not isinstance(payload.get("data"), list):
+                raise RuntimeError(f"Unexpected API response on page {page}: success/data fields missing")
             return payload
+
         except (requests.RequestException, ValueError) as exc:
             if attempt == MAX_RETRIES:
                 raise RuntimeError(f"Could not fetch API page {page} after {MAX_RETRIES} attempts") from exc
             wait = min(2 ** attempt, 60)
             log.warning("Page %s request failed (%s); retrying in %ss", page, exc, wait)
             time.sleep(wait)
+
     raise RuntimeError(f"Failed to fetch page {page}")
 
 
