@@ -157,6 +157,21 @@ class OfferEligibilityTests(unittest.TestCase):
         game["source"] = "Xbox Game Pass subscription catalogue"
         self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
 
+    def test_accepts_boolean_is_free_field(self):
+        game = self.base_offer()
+        game["is_free"] = True
+        self.assertTrue(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_ignores_generic_f2p_category_when_offer_is_temporary_paid_game(self):
+        game = self.base_offer()
+        game["category"] = "Action"
+        self.assertTrue(notifier.is_eligible_temporary_offer(game, now=self.now))
+
+    def test_rejects_explicit_f2p_classification(self):
+        game = self.base_offer()
+        game["pricing_type"] = "free-to-play"
+        self.assertFalse(notifier.is_eligible_temporary_offer(game, now=self.now))
+
     def test_rejects_zero_original_price(self):
         game = self.base_offer()
         game["original_price"] = "0"
