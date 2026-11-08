@@ -481,9 +481,18 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         "ps plus", "subscription", "included with", "included in pass",
         "game catalog", "game catalogue", "permanently free",
     )
+    has_subscription_marker = any(
+        field in game
+        for field in ("subscription", "subscription_name", "is_subscription", "subscription_included")
+    )
     if any(_normalised_text(term) in searchable for term in excluded_phrases):
         return False
     if game.get("is_subscription") is True or game.get("subscription_included") is True:
+        return False
+    if has_subscription_marker and any(
+        game.get(field) not in (None, "", False, 0)
+        for field in ("subscription", "subscription_name")
+    ):
         return False
 
     # A record explicitly marked as a permanently/free-to-play title is not a
