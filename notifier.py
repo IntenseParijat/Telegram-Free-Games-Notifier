@@ -116,6 +116,7 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     all_games: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
     seen_page_fingerprints: set[frozenset[str]] = set()
+    seen_malformed_pages: set[str] = set()
     scan_complete = False
 
     with requests.Session() as session:
@@ -132,8 +133,21 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             fingerprint = frozenset(page_keys)
 
             if records and not valid_records:
-                log.warning("Page %s contained no valid game objects; stopping with a partial scan.", page)
-                break
+                # Ignore malformed entries. They do not count as games and
+                # must not prevent later pages (or the empty end marker) from
+                # being read. If the API repeats the same malformed page,
+                # its fingerprint above cannot detect it, so use a separate
+                # malformed-page fingerprint.
+                malformed_fingerprint = repr(records)
+                if malformed_fingerprint in seen_malformed_pages:
+                    log.warning(
+                        "FreeGameRadar repeated a page containing no valid game objects at page %s; stopping partial scan.",
+                        page,
+                    )
+                    break
+                seen_malformed_pages.add(malformed_fingerprint)
+                log.warning("Ignoring %s malformed records on page %s.", len(records), page)
+                continue
 
             if fingerprint and fingerprint in seen_page_fingerprints:
                 log.warning(
