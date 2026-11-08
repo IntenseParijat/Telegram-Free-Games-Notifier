@@ -192,7 +192,13 @@ def save_state(seen: set[str]) -> None:
 
 
 def safe_text(value: Any) -> str:
+    """Escape displayed data after trimming surrounding whitespace."""
     return html.escape(str(value or "").strip(), quote=False)
+
+
+def escape_text(value: Any) -> str:
+    """Escape text without altering intentional spaces in formatted templates."""
+    return html.escape(str(value or ""), quote=False)
 
 
 def enabled(field: str) -> bool:
@@ -210,7 +216,7 @@ def _format_footer_html_links(value: str) -> str:
         # plain text and the anchor, then add exactly one space when needed.
         prefix = value[cursor:match.start()]
         if prefix:
-            parts.append(safe_text(prefix.rstrip()))
+            parts.append(escape_text(prefix.rstrip()))
             if prefix[-1].isspace():
                 parts.append(" ")
         target = match.group(2)
@@ -220,7 +226,7 @@ def _format_footer_html_links(value: str) -> str:
         cursor = match.end()
     if not parts:
         return safe_text(value)
-    parts.append(safe_text(value[cursor:]))
+    parts.append(escape_text(value[cursor:]))
     return "".join(parts)
 
 
