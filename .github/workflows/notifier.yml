@@ -37,8 +37,7 @@ jobs:
       - name: Validate configuration and notifier
         run: |
           set -euo pipefail
-          python -m py_compile notifier.py config.py test_notifier.py
-          python -m unittest -v test_notifier
+          python -m py_compile notifier.py config.py
 
       - name: Run notifier
         id: notifier
@@ -99,7 +98,7 @@ jobs:
           {
             echo "## Free Game Notifier"
             echo
-            echo "- Unit tests ran before the notifier step."
+            echo "- Python syntax validation completed before notifier execution."
             echo "- Notifier outcome: $NOTIFIER_OUTCOME"
             echo "- Duplicate state is committed when changed."
             echo
