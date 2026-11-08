@@ -272,8 +272,11 @@ def valid_http_url(value: Any) -> str | None:
     url = str(value or "").strip()
     if not url:
         return None
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or any(ch.isspace() for ch in url):
         return None
     return url
 
