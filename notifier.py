@@ -414,7 +414,12 @@ def _parse_offer_datetime(value: Any):
 
 
 def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
-    """Reject permanent F2P and pass catalogue listings; accept live free-to-keep offers."""
+    """Only admit active, free-to-keep offers, never permanent F2P or subscriptions.
+
+    FreeGameRadar documents /developer/free as the active 100%-free giveaways
+    feed. The docs list no offer-type query parameter, so page/limit remain the
+    only pagination parameters. This gate uses the returned record fields.
+    """
     from datetime import datetime, timezone
 
     if not isinstance(game, dict):
@@ -423,9 +428,13 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         return False
 
     end_value = (
-        game.get("end_date") or game.get("offer_end_date")
-        or game.get("free_until") or game.get("claim_end_date")
-        or game.get("promotion_end_date")
+        game.get("end_date") or game.get("endDate")
+        or game.get("offer_end_date") or game.get("offerEndDate")
+        or game.get("free_until") or game.get("freeUntil")
+        or game.get("claim_end_date") or game.get("claimEndDate")
+        or game.get("promotion_end_date") or game.get("promotionEndDate")
+        or game.get("offer_expires_at") or game.get("expires_at")
+        or game.get("ends_at")
     )
     end_at = _parse_offer_datetime(end_value)
     now_at = now or datetime.now(timezone.utc)
@@ -434,8 +443,12 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
     if end_at is None or end_at <= now_at.astimezone(timezone.utc):
         return False
 
-    # Require evidence that this is a normally paid game temporarily discounted to zero.
-    original = game.get("original_price") or game.get("regular_price") or game.get("retail_price")
+    # A normally paid game must have a positive regular/retail value.
+    original = (
+        game.get("original_price") or game.get("originalPrice")
+        or game.get("regular_price") or game.get("regularPrice")
+        or game.get("retail_price") or game.get("retailPrice")
+    )
     try:
         original_amount = float(re.sub(r"[^0-9.]", "", str(original or "")))
     except ValueError:
@@ -443,29 +456,34 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
     if original_amount <= 0:
         return False
 
-    # Subscription/catalogue availability is not a free-to-keep giveaway.
-    searchable_values = [
-        _normalised_text(game.get(field))
+    def flatten(value: Any) -> str:
+        if isinstance(value, dict):
+            return " ".join(flatten(v) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return " ".join(flatten(v) for v in value)
+        return _normalised_text(value)
+
+    searchable = " ".join(
+        flatten(game.get(field))
         for field in (
-            "type", "offer_type", "access_type", "entitlement_type",
+            "type", "offer_type", "offerType", "access_type", "entitlement_type",
             "subscription", "subscription_name", "source", "category",
             "platform", "description", "title", "availability_type",
+            "included_with", "included_in", "is_subscription",
         )
-    ]
+    )
     excluded_phrases = (
         "game pass", "xbox game pass", "pc game pass", "playstation plus",
         "ps plus", "subscription", "included with", "included in pass",
         "game catalog", "game catalogue", "permanently free", "free to play",
         "free to start", "free2play", "f2p",
     )
-    if any(
-        _normalised_text(term) in value
-        for value in searchable_values
-        for term in excluded_phrases
-    ):
+    if any(_normalised_text(term) in searchable for term in excluded_phrases):
+        return False
+    if game.get("is_subscription") is True or game.get("subscription_included") is True:
         return False
 
-    offer_type = _normalised_text(game.get("type") or game.get("offer_type"))
+    offer_type = _normalised_text(game.get("type") or game.get("offer_type") or game.get("offerType"))
     if any(term in offer_type for term in ("dlc", "loot", "beta", "in game")):
         return False
     return True
