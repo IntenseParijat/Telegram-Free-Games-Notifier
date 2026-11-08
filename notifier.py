@@ -198,7 +198,9 @@ def _format_footer_html_links(value: str) -> str:
     parts: list[str] = []
     cursor = 0
     for match in pattern.finditer(value):
-        parts.append(safe_text(value[cursor:match.start()]))
+        # Keep any text and whitespace before this link, including "Powered By ".
+        prefix = value[cursor:match.start()]
+        parts.append(safe_text(prefix))
         target = match.group(2)
         if target.startswith("t.me/"):
             target = "https://" + target
