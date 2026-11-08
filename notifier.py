@@ -208,7 +208,6 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     """Keep the longest prefix of complete sentences that fits the visible character budget."""
     if not description:
         return ""
-
     separator = "\n\n" if fixed_caption else ""
     available = limit - visible_text_length(fixed_caption) - len(separator)
     if available <= 0:
@@ -228,8 +227,6 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     if visible_text_length(description) <= available:
         return description
     return ""
-
-
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
