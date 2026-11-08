@@ -79,11 +79,19 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
             if payload.get("success") is not True or not isinstance(payload.get("data"), list):
                 raise RuntimeError(f"Unexpected API response on page {page}: success/data fields missing")
             return payload
-        except (requests.RequestException, ValueError) as exc:
+        except requests.RequestException as exc:
             if attempt == MAX_RETRIES:
                 raise RuntimeError(f"Could not fetch API page {page} after {MAX_RETRIES} attempts") from exc
             wait = min(2 ** attempt, 60)
             log.warning("Page %s request failed (%s); retrying in %ss", page, exc, wait)
+            time.sleep(wait)
+        except ValueError as exc:
+            # A JSON decode failure may be transient, but do not confuse it
+            # with a structurally valid API response.
+            if attempt == MAX_RETRIES:
+                raise RuntimeError(f"Invalid JSON from API page {page} after {MAX_RETRIES} attempts") from exc
+            wait = min(2 ** attempt, 60)
+            log.warning("Page %s returned invalid JSON (%s); retrying in %ss", page, exc, wait)
             time.sleep(wait)
 
     raise RuntimeError(f"Failed to fetch page {page}")
