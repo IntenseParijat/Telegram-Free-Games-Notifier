@@ -1,25 +1,24 @@
 """User-editable settings for the FreeGameRadar Telegram notifier.
 
-Edit this file to control notifications, message content, and schedule.
-Secrets must remain in GitHub Actions Secrets, never in this file.
+Edit this file to control first-run behaviour, schedule, message footer, and fields.
+Keep all credentials in GitHub Actions Secrets, never in this file.
 """
 
-# First-run behaviour:
-# True  = post all currently free listings the first time the notifier runs.
-# False = silently save them as the baseline; only future additions are posted.
+# First run:
+# True  = post all currently free listings on the first run.
+# False = silently save the current catalogue as the baseline; post future additions only.
 SEND_EXISTING_ON_FIRST_RUN = False
 
-# How often GitHub Actions should run the notifier.
-# The workflow reads this value from this file. Allowed range: 1 to 24 hours.
+# How often to run the notifier (1 to 24 hours).
+# GitHub Actions uses this value to sync its schedule on manual workflow dispatch.
 RUN_INTERVAL_HOURS = 6
 
-# Telegram footer. Set either value to an empty string to omit that line.
+# Custom Telegram footer. Use "" to hide either line.
 TELEGRAM_CHANNEL_TAG = "@IntenseGaming"
 TELEGRAM_FOOTER = "Powered By Intense Network"
 
-# API fields available in the FreeGameRadar /api/v1/developer/free response.
-# Set any value to False to hide that field from the Telegram post.
-# The game title and game URL are always retained as the basic identity/claim link.
+# API response fields. All are enabled by default.
+# Set any option to False to hide that field.
 DISPLAY_FIELDS = {
     "description": True,
     "image": True,
