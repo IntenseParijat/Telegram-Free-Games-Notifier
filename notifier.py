@@ -205,21 +205,29 @@ def visible_text_length(text: str) -> int:
 
 
 def trim_description_to_fit(description: str, fixed_caption: str, limit: int) -> str:
-    """Return complete description sentences that fit in the remaining budget."""
+    """Keep whole sentences only, measuring Telegram-visible characters."""
     if not description:
         return ""
-    separator = "\n\n" if fixed_caption else ""
+    separator = "\\n\\n" if fixed_caption else ""
     available = limit - visible_text_length(fixed_caption) - len(separator)
     if available <= 0:
         return ""
-    if len(description) <= available:
-        return description
-    candidate = description[:available]
-    period = candidate.rfind(".")
-    if period < 0:
-        return ""
-    return candidate[:period + 1].rstrip()
 
+    # Description is already HTML-escaped before it reaches this function.
+    # Iterate complete sentence endings and retain the longest prefix that fits.
+    last_fitting_period = -1
+    for match in re.finditer(r"\\.", description):
+        candidate = description[:match.end()]
+        if visible_text_length(candidate) <= available:
+            last_fitting_period = match.end()
+        else:
+            break
+
+    if last_fitting_period >= 0:
+        return description[:last_fitting_period].rstrip()
+    if visible_text_length(description) <= available:
+        return description
+    return ""
 
 def compose_message(game: dict[str, Any], limit: int) -> str:
     fixed, description = fixed_caption_parts(game)
