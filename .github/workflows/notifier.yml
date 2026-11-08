@@ -2,23 +2,23 @@ name: Free Game Notifier
 
 on:
   schedule:
-    # Default fallback. Run the workflow manually after changing RUN_INTERVAL_HOURS.
     - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Prevent concurrent scans from racing on Telegram sends or the JSON database.
 concurrency:
-  group: free-game-notifier
+  group: free-game-notifier-main
   cancel-in-progress: false
 
 jobs:
   notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - name: Checkout latest main
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
@@ -32,7 +32,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --upgrade -r requirements.txt
+
       - name: Run notifier
+        id: notifier
+        continue-on-error: true
         env:
           FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -40,15 +43,20 @@ jobs:
           TELEGRAM_SESSION: ${{ secrets.TELEGRAM_SESSION }}
           TELEGRAM_CHANNEL: ${{ secrets.TELEGRAM_CHANNEL }}
         run: python notifier.py
+
       - name: Commit duplicate-tracking state
         if: always()
         run: |
-          if [[ -f data/seen_games.json ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+actions[bot]@users.noreply.github.com"
-            git add data/seen_games.json
-            if ! git diff --cached --quiet; then
-              git commit -m "Update notified free games state [skip ci]"
-              git push
-            fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+actions[bot]@users.noreply.github.com"
+          git add data/seen_games.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update notified free games state [skip ci]"
+            git push
           fi
+
+      - name: Preserve notifier failure status
+        if: always() && steps.notifier.outcome == 'failure'
+        run: |
+          echo "Notifier failed. See the Run notifier step above; successfully posted items were saved and failed items remain pending."
+          exit 1
