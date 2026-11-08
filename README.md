@@ -62,10 +62,10 @@ All non-secret preferences are in `config.py`. Edit this file on `main` to chang
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `SEND_EXISTING_ON_FIRST_RUN` | `False` | Post all existing listings on the first scan, or silently seed the baseline. |
+| `SEND_EXISTING_ON_FIRST_RUN` | `True` | Post all existing listings on the first scan, or silently seed the baseline. |
 | `RUN_INTERVAL_HOURS` | `6` | Scheduled interval, from 1 to 24 hours. |
 | `TELEGRAM_CHANNEL_TAG` | `@IntenseGaming` | First footer line; set to `""` to disable. |
-| `TELEGRAM_FOOTER` | `Powered By Intense Network` | Second footer line; set to `""` to disable. |
+| `TELEGRAM_FOOTER` | `Powered By [Intense Network](t.me/IntenseNetwork)` | Second footer line; set to `""` to disable. |
 | `DISPLAY_FIELDS` | All `True` | Select which API fields appear in messages. |
 
 ### First-run behaviour
@@ -81,12 +81,14 @@ Set `RUN_INTERVAL_HOURS` to an integer from 1 to 24. The workflow updates its cr
 
 ### Footer
 
-Edit `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER` to customise the final lines. Set either value to `""` to omit that line. The defaults restore the previous footer style:
+Edit `TELEGRAM_CHANNEL_TAG` and `TELEGRAM_FOOTER` to customise the final lines. Set either value to `""` to omit that line. The current defaults render as:
 
 ```text
 @IntenseGaming
 Powered By Intense Network
 ```
+
+The footer is rendered as Telegram HTML. For a linked footer, use Telegram HTML anchor syntax, for example `Powered By <a href="https://t.me/IntenseNetwork">Intense Network</a>`. Plain Markdown link syntax is not interpreted by Telegram.
 
 ### Available API fields
 
@@ -147,6 +149,16 @@ If images are disabled or the image upload fails, a text message is sent instead
 The notifier stores platform plus `game_id` (falling back to the API listing `id`) in `data/seen_games.json`. The same game on different platforms is treated as a separate listing. IDs are retained even if a listing temporarily disappears from the API. The state file is committed back to the repository after each workflow run.
 
 Do not delete or replace `data/seen_games.json` unless you intentionally want to reset duplicate tracking.
+
+
+
+## API pagination and recovery
+
+The notifier requests pages of 100 records. If FreeGameRadar returns the same page more than once (as happened during one observed run), it logs a warning and stops paging instead of treating the whole run as fatal. It then processes the unique records already collected. This prevents the same 100 records from breaking every run, but it cannot notify games hidden beyond a page the API does not return. The API's pagination behaviour remains an external limitation.
+
+If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. Successful Telegram deliveries are saved to the database immediately. A game whose delivery fails remains unseen and is eligible for the next run. The workflow commits the state even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
+
+The repository keeps an empty `data/seen_games.json` file under version control. Do not delete it unless intentionally resetting duplicate tracking. With `SEND_EXISTING_ON_FIRST_RUN = True`, an empty tracked database is treated as a first run and the current listings are posted. Set it to `False` to silently seed the current catalogue instead.
 
 ## Local run
 
