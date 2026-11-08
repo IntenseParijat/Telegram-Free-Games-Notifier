@@ -38,6 +38,20 @@ class PaginationTests(unittest.TestCase):
         self.assertTrue(complete)
         self.assertEqual({game["game_id"] for game in games}, {"g1", "g2", "g3"})
 
+    def test_reordered_repeated_page_is_detected(self):
+        page1 = [
+            {"game_id": "g1", "platform": "Steam"},
+            {"game_id": "g2", "platform": "Epic"},
+        ]
+        page2 = list(reversed(page1))
+        with patch.object(notifier, "fetch_page", side_effect=[
+            {"success": True, "data": page1},
+            {"success": True, "data": page2},
+        ]):
+            games, complete = notifier.fetch_all_games("key")
+        self.assertFalse(complete)
+        self.assertEqual(len(games), 2)
+
 
 class CaptionTests(unittest.TestCase):
     def test_sentence_boundary_trimming_matches_requested_example(self):
@@ -61,11 +75,12 @@ class CaptionTests(unittest.TestCase):
         result = notifier.trim_description_to_fit(description, fixed, 110)
         self.assertEqual(result, "A &amp; B.")
 
+    def test_emoji_use_telegram_utf16_length(self):
+        self.assertEqual(notifier.visible_text_length("🎮"), 2)
+        self.assertEqual(notifier.visible_text_length("A🎮B"), 4)
+
     def test_no_partial_sentence_is_returned(self):
-        self.assertEqual(
-            notifier.trim_description_to_fit("No period here", "X" * 99, 100),
-            "",
-        )
+        self.assertEqual(notifier.trim_description_to_fit("No period here", "X" * 99, 100), "")
 
 
 class FormattingTests(unittest.TestCase):
@@ -75,23 +90,30 @@ class FormattingTests(unittest.TestCase):
         )
         self.assertEqual(
             result,
-            '<a href="https://t.me/IntenseNetwork">Intense Network</a>',
+            'Powered By <a href="https://t.me/IntenseNetwork">Intense Network</a>',
         )
 
-    def test_legacy_tme_footer_converts_to_telegram_html(self):
+    def test_configured_footer_link_converts_exactly(self):
         result = notifier.format_footer_line("Powered By [Intense Network](t.me/IntenseNetwork)")
         self.assertEqual(
             result,
-            '<a href="https://t.me/IntenseNetwork">Intense Network</a>',
+            'Powered By <a href="https://t.me/IntenseNetwork">Intense Network</a>',
+        )
+
+    def test_multiple_links_and_plain_text_are_preserved(self):
+        result = notifier.format_footer_line(
+            "Join [Network](t.me/IntenseNetwork) or [News](https://t.me/News) now"
+        )
+        self.assertEqual(
+            result,
+            'Join <a href="https://t.me/IntenseNetwork">Network</a> or '
+            '<a href="https://t.me/News">News</a> now',
         )
 
     def test_invalid_game_urls_are_rejected(self):
         self.assertIsNone(notifier.valid_http_url("javascript:alert(1)"))
         self.assertIsNone(notifier.valid_http_url("not a url"))
-        self.assertEqual(
-            notifier.valid_http_url("https://example.com/game"),
-            "https://example.com/game",
-        )
+        self.assertEqual(notifier.valid_http_url("https://example.com/game"), "https://example.com/game")
 
 
 class StateTests(unittest.TestCase):
@@ -100,10 +122,7 @@ class StateTests(unittest.TestCase):
             state_path = Path(folder) / "seen_games.json"
             with patch.object(notifier, "STATE_PATH", state_path):
                 notifier.save_state({"steam:one", "epic:two"})
-                self.assertEqual(
-                    notifier.load_state(),
-                    {"steam:one", "epic:two"},
-                )
+                self.assertEqual(notifier.load_state(), {"steam:one", "epic:two"})
 
     def test_state_limit_does_not_silently_discard_history(self):
         with tempfile.TemporaryDirectory() as folder:
