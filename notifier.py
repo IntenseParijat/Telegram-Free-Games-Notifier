@@ -242,16 +242,14 @@ def trim_description_to_fit(description: str, fixed_caption: str, limit: int) ->
     """Keep the longest complete-sentence prefix within the rendered Telegram limit."""
     if not description:
         return ""
-
     separator = "\n\n" if fixed_caption else ""
     remaining = limit - visible_text_length(fixed_caption) - len(separator)
     if remaining <= 0:
         return ""
 
-    # Description is HTML-escaped before trimming. Only a sentence ending in a
-    # period can be used as the truncation boundary.
+    # Description is HTML-escaped before trimming.
     best_end = -1
-    for match in re.finditer(r"\\.", description):
+    for match in re.finditer(r"\.", description):
         candidate = description[:match.end()]
         if visible_text_length(candidate) <= remaining:
             best_end = match.end()
