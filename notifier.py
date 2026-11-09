@@ -99,11 +99,47 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
     raise RuntimeError(f"Failed to fetch page {page}")
 
 
+def _offer_start_value(game: dict[str, Any]) -> Any:
+    """Return the best available timestamp identifying this specific giveaway."""
+    return (
+        game.get("start_date") or game.get("startDate")
+        or game.get("offer_start_date") or game.get("offerStartDate")
+        or game.get("promotion_start_date") or game.get("promotionStartDate")
+        or game.get("free_from") or game.get("freeFrom")
+        or game.get("offer_started_at") or game.get("starts_at")
+        or game.get("created_at") or game.get("createdAt")
+    )
+
+
 def game_key(game: dict[str, Any]) -> str:
+    """Identify a promotion by platform, game and offer start time.
+
+    The fallback game-only key is retained for records that do not expose any
+    offer-start timestamp, preserving duplicate protection for incomplete API
+    records. Legacy keys are recognised during migration below.
+    """
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+    if not identifier:
+        raise ValueError("Game record has no usable game_id, id, or title")
+
+    start_value = _offer_start_value(game)
+    start_at = _parse_offer_datetime(start_value)
+    if start_at is not None:
+        offer_start = start_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+        return f"{platform}:{identifier}:offer:{offer_start}"
+
+    return f"{platform}:{identifier}"
+
+
+def legacy_game_key(game: dict[str, Any]) -> str:
+    """Return the pre-offer-tracking key for existing state migration."""
+    platform = str(game.get("platform") or "Unknown").strip().casefold()
+    identifier = str(game.get("game_id") or game.get("id") or "").strip()
+    if not identifier:
+        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
     return f"{platform}:{identifier}"
@@ -551,9 +587,23 @@ async def run_notifier() -> None:
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
-    new_games = [(key, game) for key, game in current_games.items() if key not in seen]
+    # Migrate old game-only markers without reposting those already-seen
+    # offers. A legacy marker suppresses the first offer timestamp we encounter
+    # for that game, then the new offer-specific key is stored after delivery.
+    # Later offers with a different start time receive a distinct key.
+    new_games: list[tuple[str, dict[str, Any]]] = []
+    for key, game in current_games.items():
+        if key in seen:
+            continue
+        old_key = legacy_game_key(game)
+        if old_key in seen:
+            # Treat the old marker as identifying the currently observed offer
+            # once. Recording the offer key migrates it to the new state format.
+            seen.add(key)
+            continue
+        new_games.append((key, game))
     log.info(
-        "Fetched %s API records; %s unique free listings; %s not yet posted; scan_complete=%s",
+        "Fetched %s API records; %s unique free offers; %s not yet posted; scan_complete=%s",
         len(games),
         len(current_games),
         len(new_games),
