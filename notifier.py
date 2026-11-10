@@ -1038,41 +1038,15 @@ async def run_notifier() -> None:
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
-    # A legacy game-only marker means the game was previously posted, but
-    # the old format cannot identify which offer date it represented. For the
-    # one-time migration, suppress only the first active offer seen for that
-    # game. Later campaigns have distinct timestamps and remain eligible.
-    new_games: list[tuple[str, dict[str, Any]]] = []
-    migrated_legacy_keys: set[str] = set()
-    for key, game in current_games.items():
-        if key in seen:
-            continue
-
-        old_key = legacy_game_key(game)
-        start_at = _parse_offer_datetime(_offer_start_value(game))
-        if old_key in seen and old_key not in migrated_legacy_keys:
-            # Legacy IDs cannot tell us which offer was posted. Do not guess
-            # that a current campaign is the old one: only explicitly seed the
-            # historical Flotsam offer known to have been posted in the old
-            # format. All other games with a legacy marker stay suppressed
-            # conservatively rather than risking repeat posts.
-            if (
-                str(game.get("title") or "").strip().casefold() == "flotsam"
-                and start_at is not None
-                and start_at.isoformat(timespec="seconds") == "2026-11-05T16:00:00+00:00"
-            ):
-                seen.add(key)
-                migrated_legacy_keys.add(old_key)
-                log.info("Recognised previously delivered Flotsam offer and migrated its legacy state")
-                continue
-            migrated_legacy_keys.add(old_key)
-            log.info(
-                "Legacy sent marker retained for %s; skipping because prior offer date is unknown",
-                game.get("title"),
-            )
-            continue
-
-        new_games.append((key, game))
+    # Offer-specific keys are authoritative. The old game-only key is kept
+    # in state for history, but must not suppress a new offer with a new start
+    # timestamp. The previously posted Flotsam offer is already represented by
+    # its exact offer key in seen_games.json.
+    new_games = [
+        (key, game)
+        for key, game in current_games.items()
+        if key not in seen
+    ]
     log.info(
         "Fetched %s API records; %s unique free offers; %s not yet posted; scan_complete=%s",
         len(games),
