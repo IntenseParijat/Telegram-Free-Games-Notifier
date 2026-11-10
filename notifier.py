@@ -236,30 +236,13 @@ def fetch_epic_mobile_platform(
         # Mobile discovery uses a mixture of catalog schemas. Require an
         # explicit free claim affordance or a zero-price active promotion,
         # and reject upcoming, unavailable, and already-owned states.
-        actions = item.get("actions") or item.get("offerActions") or []
-        if isinstance(actions, dict):
-            actions = [actions]
-        # Epic mobile discover/home stores offer states under catalog pricing
-        # and may expose button actions either on the item or its nested
-        # offer/product summary.
+        # Epic's mobile discover endpoint places the offer summary and its
+        # pricing in nested structures. Do not infer a giveaway from a generic
+        # free button: require both a positive normal price and explicit zero
+        # promotional price, plus a current promotion expiry.
         nested_offer = item.get("offer") or item.get("product") or {}
         if not isinstance(nested_offer, dict):
             nested_offer = {}
-        if not actions:
-            actions = nested_offer.get("actions") or nested_offer.get("offerActions") or []
-            if isinstance(actions, dict):
-                actions = [actions]
-        action_text = " ".join(
-            str(action.get(k) or "")
-            for action in actions if isinstance(action, dict)
-            for k in ("name", "label", "action", "type")
-        ).casefold()
-        action_urls = [
-            str(action.get(k))
-            for action in actions if isinstance(action, dict)
-            for k in ("url", "uri", "link")
-            if action.get(k)
-        ]
 
         price_data = (
             item.get("price") or item.get("pricing")
@@ -270,9 +253,11 @@ def fetch_epic_mobile_platform(
         total = price_data.get("totalPrice") or price_data.get("total_price") or price_data
         if not isinstance(total, dict):
             total = {}
+
         original_raw = (
-            total.get("originalPrice") or total.get("original_price")
-            or item.get("originalPrice") or item.get("original_price")
+            total.get("originalPrice") if "originalPrice" in total else
+            total.get("original_price") if "original_price" in total else
+            item.get("originalPrice", item.get("original_price"))
         )
         discount_raw = (
             total.get("discountPrice") if "discountPrice" in total else
@@ -281,35 +266,43 @@ def fetch_epic_mobile_platform(
         )
         original_price = _mobile_price_amount(original_raw)
         discount_price = _mobile_price_amount(discount_raw)
+        if original_price <= 0 or discount_raw is None or discount_price != 0:
+            continue
 
         promotion = (
             item.get("promotion") or item.get("promotions")
             or nested_offer.get("promotion") or nested_offer.get("promotions") or {}
         )
         if isinstance(promotion, list):
-            promotion = promotion[0] if promotion else {}
-        if not isinstance(promotion, dict):
-            promotion = {}
-        start_value = (
-            promotion.get("startDate") or promotion.get("start_date")
-            or item.get("startDate") or item.get("start_date")
-        )
-        end_value = (
-            promotion.get("endDate") or promotion.get("end_date")
-            or item.get("endDate") or item.get("end_date")
-        )
+            promotion_groups = promotion
+        elif isinstance(promotion, dict):
+            promotion_groups = promotion.get("promotionalOffers") or promotion.get("promotional_offers") or [promotion]
+        else:
+            promotion_groups = []
 
-        active_flag = item.get("isFree") is True or item.get("is_free") is True
-        claim_action = any(word in action_text for word in ("claim", "get", "free"))
-        explicit_zero_price = discount_raw is not None and discount_price == 0
-        if not (claim_action or active_flag or explicit_zero_price):
+        active_promotions: list[dict[str, Any]] = []
+        for group in promotion_groups:
+            if not isinstance(group, dict):
+                continue
+            offers = group.get("promotionalOffers") or group.get("offers") or [group]
+            for offer in offers:
+                if isinstance(offer, dict):
+                    active_promotions.append(offer)
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        current_promotions: list[dict[str, Any]] = []
+        for offer in active_promotions:
+            start_at = _parse_offer_datetime(offer.get("startDate") or offer.get("start_date"))
+            end_at = _parse_offer_datetime(offer.get("endDate") or offer.get("end_date"))
+            if end_at and end_at > now and (start_at is None or start_at <= now):
+                current_promotions.append(offer)
+        if not current_promotions:
             continue
-        if original_price <= 0:
-            continue
-        if discount_raw is not None and discount_price != 0:
-            continue
-        if not end_value:
-            continue
+
+        active_offer = current_promotions[0]
+        start_value = active_offer.get("startDate") or active_offer.get("start_date")
+        end_value = active_offer.get("endDate") or active_offer.get("end_date")
 
         store_url = (
             item.get("productUrl") or item.get("product_url")
