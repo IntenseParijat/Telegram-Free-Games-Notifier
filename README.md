@@ -1,6 +1,6 @@
 # Telegram Free Games Notifier
 
-Checks FreeGameRadar's documented store-filtered free-giveaway feeds independently (Epic, Steam, GOG and Other), merges the results, and posts eligible listings to a Telegram channel using your Telegram account through Telethon.
+Checks FreeGameRadar's store-filtered free-giveaway feeds independently and also checks Epic's separate Android/iOS mobile giveaway API. It merges the results and posts eligible offers to a Telegram channel using your Telegram account through Telethon.
 
 ## Setup
 
@@ -115,6 +115,14 @@ The notifier stores each giveaway separately using platform, `game_id` (falling 
 Do not delete or replace `data/seen_games.json` unless you intentionally want to reset duplicate tracking.
 
 
+
+## Epic Games Store mobile giveaways
+
+Epic's mobile giveaways do not appear in the regular PC free-games promotions feed. The notifier therefore checks Epic's separate mobile discovery endpoint for both Android and iOS, in addition to the store-filtered FreeGameRadar feeds.
+
+A mobile offer is accepted only when Epic reports a currently active zero-price `Claim` purchase state, the normal paid value is positive, and the claim has a valid end time. The end time comes from Epic's `discountEndDate` or the next purchase-state transition. The notifier does not invent an expiry when Epic omits it. Android and iOS offers are tracked separately because they can use different storefront product identifiers.
+
+The mobile request uses a cache-busting query parameter to avoid stale CDN results. If either mobile platform cannot be fetched, that limitation is logged and the overall catalogue is marked partial; results from the other feeds are still processed.
 
 ## API pagination and recovery
 
