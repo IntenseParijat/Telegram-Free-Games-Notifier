@@ -1,6 +1,6 @@
 # Telegram Free Games Notifier
 
-Checks FreeGameRadar for free games across its supported platforms and posts new listings to a Telegram channel using your Telegram account through Telethon.
+Checks FreeGameRadar's documented store-filtered free-giveaway feeds independently (Epic, Steam, GOG and Other), merges the results, and posts eligible listings to a Telegram channel using your Telegram account through Telethon.
 
 ## Setup
 
@@ -118,7 +118,7 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## API pagination and recovery
 
-The notifier requests pages of up to 100 records. It removes duplicate listings across pages and stops with a partial-scan warning if FreeGameRadar repeats a page (including the same records in a different order). It does not assume a short page is the last page: pagination continues until the API returns an empty page, a repeated page, or the safety page limit is reached. Unique records already returned can still be delivered when a repeated page prevents a full scan.
+The notifier queries Epic, Steam, GOG and Other separately using FreeGameRadar's documented platform filter, with pages of up to 100 records for each store. It deduplicates within and across feeds. Each feed is paginated independently until an empty page, a repeated page, or the safety page limit is reached. A repeated page on one feed is reported as partial and does not discard records collected from other feeds.
 
 A partial scan never initializes a first-run baseline. That prevents the notifier from treating the first page as the complete catalogue and permanently suppressing games it could not see. If the database already exists, successfully posted titles are recorded normally; failed Telegram deliveries remain unseen and eligible for the next run.
 
