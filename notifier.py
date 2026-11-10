@@ -229,11 +229,20 @@ def fetch_epic_mobile_platform(
             if not slug:
                 continue
 
-            # This is Epic's actual mobile claim signal: the free entry is a
-            # Claim purchase with a zero decimal price. A paid offer for the
-            # same item may coexist, so do not accept a generic product listing.
+            # Epic's mobile API represents the giveaway as a zero-price
+            # Claim purchase. The active window is bounded by discountEndDate
+            # or by the next purchase-state transition (usually the paid entry).
+            purchases = content.get("purchase") or []
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+
+            def purchase_time(value: Any):
+                parsed = _parse_offer_datetime(value)
+                return parsed
+
             claim_entry = None
-            for purchase in content.get("purchase") or []:
+            claim_index = -1
+            for index, purchase in enumerate(purchases):
                 if not isinstance(purchase, dict):
                     continue
                 purchase_price = purchase.get("price") or {}
@@ -241,48 +250,59 @@ def fetch_epic_mobile_platform(
                     decimal_price = float(purchase_price.get("decimalPrice"))
                 except (TypeError, ValueError):
                     continue
-                if purchase.get("purchaseType") == "Claim" and decimal_price == 0:
+                effective_at = purchase_time(purchase.get("purchaseStateEffectiveDate"))
+                if (
+                    purchase.get("purchaseType") == "Claim"
+                    and decimal_price == 0
+                    and (effective_at is None or effective_at <= now)
+                ):
                     claim_entry = purchase
+                    claim_index = index
                     break
             if claim_entry is None:
                 continue
 
-            title = content.get("title") or "Unknown"
-            original_price = 0.0
-            for purchase in content.get("purchase") or []:
-                if not isinstance(purchase, dict) or purchase is claim_entry:
-                    continue
-                purchase_price = purchase.get("price") or {}
-                try:
-                    candidate = float(purchase_price.get("decimalPrice"))
-                except (TypeError, ValueError):
-                    continue
-                if candidate > 0:
-                    original_price = candidate
-                    break
-            if original_price <= 0:
-                # Epic sometimes exposes the usual value on the Claim entry
-                # while the paid entry is absent from the mobile card. A
-                # mobile offer without a verified positive normal price is
-                # not sufficiently grounded for the paid-game eligibility rule.
-                continue
-
-            page_url = f"https://store.epicgames.com/en-US/p/{slug}"
-            start_value = (
-                claim_entry.get("startDate") or claim_entry.get("start_date")
-                or content.get("startDate") or content.get("start_date")
-            )
-            end_value = (
-                claim_entry.get("endDate") or claim_entry.get("end_date")
-                or content.get("endDate") or content.get("end_date")
-            )
+            claim_discount = claim_entry.get("discount") or {}
+            end_value = claim_discount.get("discountEndDate")
             if not end_value:
-                # The mobile endpoint often exposes only the Claim state and
-                # not its expiry. Do not fabricate a date or assume a 7-day
-                # duration. Such a product cannot pass our timed-offer gate.
-                log.info("Epic %s mobile: %s has no expiry timestamp; skipping", platform, title)
+                for next_purchase in purchases[claim_index + 1:]:
+                    if not isinstance(next_purchase, dict):
+                        continue
+                    next_effective = next_purchase.get("purchaseStateEffectiveDate")
+                    next_at = purchase_time(next_effective)
+                    if next_at is not None and next_at > now:
+                        end_value = next_effective
+                        break
+            if not end_value:
+                log.info("Epic %s mobile: %s has no claim end time; skipping", platform, content.get("title"))
                 continue
 
+            original_price = 0.0
+            original_display = claim_discount.get("originalPriceDisplay") or claim_entry.get("priceDisplay")
+            if original_display:
+                try:
+                    original_price = float(re.sub(r"[^0-9.]", "", str(original_display)))
+                except ValueError:
+                    original_price = 0.0
+            if original_price <= 0:
+                for purchase in purchases:
+                    if not isinstance(purchase, dict) or purchase is claim_entry:
+                        continue
+                    purchase_price = purchase.get("price") or {}
+                    try:
+                        candidate = float(purchase_price.get("decimalPrice"))
+                    except (TypeError, ValueError):
+                        continue
+                    if candidate > 0:
+                        original_price = candidate
+                        break
+            if original_price <= 0:
+                log.info("Epic %s mobile: %s has no positive regular price; skipping", platform, content.get("title"))
+                continue
+
+            title = content.get("title") or "Unknown"
+            start_value = claim_entry.get("purchaseStateEffectiveDate")
+            page_url = f"https://store.epicgames.com/en-US/p/{slug}"
             description = content.get("description") or content.get("shortDescription") or ""
             identifier = (
                 content.get("id") or content.get("productId")
