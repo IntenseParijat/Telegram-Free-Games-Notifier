@@ -451,14 +451,14 @@ def _offer_start_value(game: dict[str, Any]) -> Any:
 def game_key(game: dict[str, Any]) -> str:
     """Identify a promotion by platform, game and offer start time.
 
-    The fallback game-only key is retained for records that do not expose any
-    offer-start timestamp, preserving duplicate protection for incomplete API
-    records. Legacy keys are recognised during migration below.
+    Records without a parseable offer-start timestamp fall back to the
+    platform-plus-game key, preserving duplicate protection for incomplete API
+    records.
     """
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
 
@@ -476,7 +476,7 @@ def legacy_game_key(game: dict[str, Any]) -> str:
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
     return f"{platform}:{identifier}"
