@@ -47,19 +47,26 @@ def required_env(name: str) -> str:
     return value
 
 
-def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dict[str, Any]:
+def fetch_page(
+    session: requests.Session,
+    page: int,
+    api_key: str | None,
+    platform: str | None = None,
+) -> dict[str, Any]:
     headers = {"Accept": "application/json", "User-Agent": "Telegram-Free-Games-Notifier/1.0"}
     if api_key:
         headers["X-API-Key"] = api_key
+
+    params: dict[str, Any] = {"page": page, "limit": PAGE_SIZE}
+    if platform:
+        params["platform"] = platform
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = session.get(
                 API_URL,
                 headers=headers,
-                # /developer/free documents platform, page and limit only.
-                # The endpoint itself is the active 100%-free giveaways feed.
-                params={"page": page, "limit": PAGE_SIZE},
+                params=params,
                 timeout=REQUEST_TIMEOUT,
             )
             if response.status_code == 429 or response.status_code >= 500:
@@ -70,34 +77,139 @@ def fetch_page(session: requests.Session, page: int, api_key: str | None) -> dic
                     wait = min(2 ** attempt, 60)
                 if attempt == MAX_RETRIES:
                     response.raise_for_status()
-                log.warning("API returned HTTP %s on page %s; retrying in %ss", response.status_code, page, wait)
+                log.warning(
+                    "API returned HTTP %s for %s page %s; retrying in %ss",
+                    response.status_code, platform or "all-platform", page, wait,
+                )
                 time.sleep(wait)
                 continue
 
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
-                raise RuntimeError(f"Unexpected non-object API response on page {page}")
+                raise RuntimeError(f"Unexpected non-object API response for {platform or 'all-platform'} page {page}")
             if payload.get("success") is not True or not isinstance(payload.get("data"), list):
-                raise RuntimeError(f"Unexpected API response on page {page}: success/data fields missing")
+                raise RuntimeError(f"Unexpected API response for {platform or 'all-platform'} page {page}: success/data missing")
             return payload
         except requests.RequestException as exc:
             if attempt == MAX_RETRIES:
-                raise RuntimeError(f"Could not fetch API page {page} after {MAX_RETRIES} attempts") from exc
+                raise RuntimeError(
+                    f"Could not fetch {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
+                ) from exc
             wait = min(2 ** attempt, 60)
-            log.warning("Page %s request failed (%s); retrying in %ss", page, exc, wait)
+            log.warning(
+                "%s page %s request failed (%s); retrying in %ss",
+                platform or "All-platform", page, exc, wait,
+            )
             time.sleep(wait)
         except ValueError as exc:
-            # A JSON decode failure may be transient, but do not confuse it
-            # with a structurally valid API response.
             if attempt == MAX_RETRIES:
-                raise RuntimeError(f"Invalid JSON from API page {page} after {MAX_RETRIES} attempts") from exc
+                raise RuntimeError(
+                    f"Invalid JSON from {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
+                ) from exc
             wait = min(2 ** attempt, 60)
-            log.warning("Page %s returned invalid JSON (%s); retrying in %ss", page, exc, wait)
+            log.warning(
+                "%s page %s returned invalid JSON (%s); retrying in %ss",
+                platform or "All-platform", page, exc, wait,
+            )
             time.sleep(wait)
 
-    raise RuntimeError(f"Failed to fetch page {page}")
+    raise RuntimeError(f"Failed to fetch {platform or 'all-platform'} API page {page}")
 
+
+def _fetch_platform_games(
+    session: requests.Session,
+    api_key: str | None,
+    platform: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch one independently paginated platform feed."""
+    label = platform or "all-platform"
+    platform_games: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    seen_page_fingerprints: set[frozenset[str]] = set()
+    scan_complete = False
+
+    for page in range(1, MAX_PAGES + 1):
+        payload = fetch_page(session, page, api_key, platform)
+        records = payload["data"]
+        if not records:
+            scan_complete = True
+            log.info("%s feed pagination ended normally at empty page %s", label, page)
+            break
+
+        valid_records = [record for record in records if isinstance(record, dict)]
+        page_keys = [game_key(record) for record in valid_records]
+        fingerprint = frozenset(page_keys)
+
+        if records and not valid_records:
+            log.warning("Ignoring %s malformed records in %s page %s", len(records), label, page)
+            continue
+
+        if fingerprint and fingerprint in seen_page_fingerprints:
+            log.warning(
+                "%s feed repeated page %s; this feed is PARTIAL after %s unique records",
+                label, page, len(platform_games),
+            )
+            break
+        if fingerprint:
+            seen_page_fingerprints.add(fingerprint)
+
+        added_this_page = 0
+        for record, key in zip(valid_records, page_keys):
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            platform_games.append(record)
+            added_this_page += 1
+
+        log.info(
+            "%s feed page %s: %s records, %s new, %s unique total",
+            label, page, len(records), added_this_page, len(platform_games),
+        )
+        if added_this_page == 0:
+            log.warning("%s feed page %s contained no new records; stopping PARTIAL", label, page)
+            break
+    else:
+        log.warning("%s feed reached page safety limit; scan is PARTIAL", label)
+
+    return platform_games, scan_complete
+
+
+def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch independent platform feeds and merge them before filtering.
+
+    The aggregate scan is complete only when every platform feed reaches its
+    documented empty-page terminator. A repeated page on one feed is recorded
+    as partial but does not discard records from other feeds.
+    """
+    platforms: tuple[str | None, ...] = (None, "Epic", "Steam", "GOG", "Other")
+    all_games: list[dict[str, Any]] = []
+    seen_global: set[str] = set()
+    all_complete = True
+
+    with requests.Session() as session:
+        for platform in platforms:
+            games, complete = _fetch_platform_games(session, api_key, platform)
+            all_complete = all_complete and complete
+
+            added = 0
+            for game in games:
+                key = game_key(game)
+                if key in seen_global:
+                    continue
+                seen_global.add(key)
+                all_games.append(game)
+                added += 1
+            log.info(
+                "Merged %s feed: %s records received, %s unique records added",
+                platform or "all-platform", len(games), added,
+            )
+
+    log.info(
+        "Combined catalogue: %s unique API records; aggregate scan_complete=%s",
+        len(all_games), all_complete,
+    )
+    return all_games, all_complete
 
 def _offer_start_value(game: dict[str, Any]) -> Any:
     """Return the best available timestamp identifying this specific giveaway."""
