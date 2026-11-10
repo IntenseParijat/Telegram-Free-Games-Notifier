@@ -186,25 +186,52 @@ def fetch_epic_mobile_platform(
     a positive normal price are converted into notifier records.
     """
     params = {
-        "count": 50,
+        "count": 10,
         "country": os.getenv("EPIC_COUNTRY", "US"),
-        "locale": os.getenv("EPIC_LOCALE", "en"),
+        "locale": os.getenv("EPIC_LOCALE", "en-US"),
         "platform": platform,
         "start": 0,
         "store": "EGS",
+        # Epic's CDN caches this endpoint by the complete query string.
+        "cb": int(time.time() * 1000),
     }
     headers = {
         "Accept": "application/json",
-        "User-Agent": "Telegram-Free-Games-Notifier/1.0",
-        "Origin": "https://store.epicgames.com",
-        "Referer": "https://store.epicgames.com/",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "EpicGamesStore/1.0 (Android)",
     }
-    try:
-        response = session.get(MOBILE_EPIC_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Could not fetch Epic {platform} mobile offers: {exc}") from exc
+
+    payload: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = session.get(
+                MOBILE_EPIC_API_URL,
+                params=params,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            candidate = response.json()
+            if not isinstance(candidate, dict) or not isinstance(candidate.get("data"), list):
+                raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response schema")
+            payload = candidate
+            break
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            last_error = exc
+            if attempt == MAX_RETRIES:
+                break
+            wait = min(2 ** attempt, 30)
+            log.warning(
+                "Epic %s mobile request failed (attempt %s/%s): %s; retrying in %ss",
+                platform, attempt, MAX_RETRIES, exc, wait,
+            )
+            time.sleep(wait)
+
+    if payload is None:
+        raise RuntimeError(f"Could not fetch Epic {platform} mobile offers after {MAX_RETRIES} attempts: {last_error}")
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response")
@@ -342,16 +369,27 @@ def fetch_epic_mobile_platform(
     )
     return normalized
 
-def fetch_epic_mobile_games(session: requests.Session) -> list[dict[str, Any]]:
+def fetch_epic_mobile_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch Android and iOS independently; report partial mobile coverage."""
     games: list[dict[str, Any]] = []
     seen: set[str] = set()
+    complete = True
     for platform in ("android", "ios"):
-        for game in fetch_epic_mobile_platform(session, platform):
+        try:
+            platform_games = fetch_epic_mobile_platform(session, platform)
+        except Exception:
+            complete = False
+            log.exception("Epic %s mobile feed could not be fetched; mobile coverage is PARTIAL", platform)
+            continue
+
+        log.info("Epic %s mobile feed found %s qualifying giveaways", platform, len(platform_games))
+        for game in platform_games:
             key = game_key(game)
-            if key not in seen:
-                seen.add(key)
-                games.append(game)
-    return games
+            if key in seen:
+                continue
+            seen.add(key)
+            games.append(game)
+    return games, complete
 
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
@@ -379,7 +417,8 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 platform, len(games), added,
             )
 
-        mobile_games = fetch_epic_mobile_games(session)
+        mobile_games, mobile_complete = fetch_epic_mobile_games(session)
+        all_complete = all_complete and mobile_complete
         mobile_added = 0
         for game in mobile_games:
             key = game_key(game)
