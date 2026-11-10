@@ -256,19 +256,17 @@ def fetch_epic_mobile_platform(
             if not slug:
                 continue
 
-            # Epic's mobile API represents the giveaway as a zero-price
-            # Claim purchase. The active window is bounded by discountEndDate
-            # or by the next purchase-state transition (usually the paid entry).
+            # A mobile product can contain multiple Claim states: an active
+            # one and a future scheduled one. Select only a currently active
+            # zero-price Claim and use its effective date as the offer start.
             purchases = content.get("purchase") or []
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
 
             def purchase_time(value: Any):
-                parsed = _parse_offer_datetime(value)
-                return parsed
+                return _parse_offer_datetime(value)
 
-            claim_entry = None
-            claim_index = -1
+            current_claims: list[tuple[int, dict[str, Any]]] = []
             for index, purchase in enumerate(purchases):
                 if not isinstance(purchase, dict):
                     continue
@@ -281,14 +279,14 @@ def fetch_epic_mobile_platform(
                 if (
                     purchase.get("purchaseType") == "Claim"
                     and decimal_price == 0
-                    and (effective_at is None or effective_at <= now)
+                    and effective_at is not None
+                    and effective_at <= now
                 ):
-                    claim_entry = purchase
-                    claim_index = index
-                    break
-            if claim_entry is None:
+                    current_claims.append((index, purchase))
+            if not current_claims:
                 continue
 
+            claim_index, claim_entry = current_claims[-1]
             claim_discount = claim_entry.get("discount") or {}
             end_value = claim_discount.get("discountEndDate")
             if not end_value:
@@ -305,7 +303,7 @@ def fetch_epic_mobile_platform(
                 continue
 
             original_price = 0.0
-            original_display = claim_discount.get("originalPriceDisplay") or claim_entry.get("priceDisplay")
+            original_display = claim_discount.get("originalPriceDisplay")
             if original_display:
                 try:
                     original_price = float(re.sub(r"[^0-9.]", "", str(original_display)))
@@ -327,22 +325,21 @@ def fetch_epic_mobile_platform(
                 log.info("Epic %s mobile: %s has no positive regular price; skipping", platform, content.get("title"))
                 continue
 
-            title = content.get("title") or "Unknown"
             start_value = claim_entry.get("purchaseStateEffectiveDate")
+            media = content.get("media") or {}
+            if not isinstance(media, dict):
+                media = {}
+            media_item = media.get("card16x9") or media.get("coverImage") or {}
+            image_url = media_item.get("imageSrc") if isinstance(media_item, dict) else None
+
+            title = content.get("title") or "Unknown"
             page_url = f"https://store.epicgames.com/en-US/p/{slug}"
             description = content.get("description") or content.get("shortDescription") or ""
             identifier = (
-                content.get("id") or content.get("productId")
+                content.get("catalogItemId") or offer.get("offerId")
+                or content.get("id") or content.get("productId")
                 or content.get("namespace") or slug
             )
-            image = content.get("keyImages") or content.get("images") or []
-            image_url = None
-            if isinstance(image, list):
-                for image_item in image:
-                    if isinstance(image_item, dict):
-                        image_url = image_item.get("url")
-                        if image_url:
-                            break
 
             normalized.append({
                 "title": str(title),
