@@ -1,6 +1,6 @@
 # Telegram Free Games Notifier
 
-Checks FreeGameRadar's store-filtered free-giveaway feeds independently and also checks Epic's separate Android/iOS mobile giveaway API. It merges the results and posts eligible offers to a Telegram channel using your Telegram account through Telethon.
+Checks FreeGameRadar's documented Epic, Steam, PlayStation and Xbox feeds independently and also checks Epic's separate Android/iOS mobile giveaway API. It merges the results and posts eligible offers to a Telegram channel using your Telegram account through Telethon.
 
 ## Setup
 
