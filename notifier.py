@@ -699,14 +699,26 @@ async def run_notifier() -> None:
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
-    # The legacy game-only key does not identify a specific promotion.
-    # Keep it as historical state, but never let it suppress an offer-specific
-    # key: doing so would lose the first new giveaway after this upgrade.
-    new_games = [
-        (key, game)
-        for key, game in current_games.items()
-        if key not in seen
-    ]
+    # Preserve the old game-only record for the already-posted first offer
+    # during the one-time key-format migration. A later offer with a different
+    # start timestamp must remain eligible.
+    new_games: list[tuple[str, dict[str, Any]]] = []
+    migrated_legacy_keys: set[str] = set()
+    for key, game in current_games.items():
+        if key in seen:
+            continue
+        old_key = legacy_game_key(game)
+        start_at = _parse_offer_datetime(_offer_start_value(game))
+        if old_key in seen and old_key not in migrated_legacy_keys and start_at is not None:
+            # The old state has no date. Suppress only the currently active
+            # offer observed on this migration run, and add its exact key.
+            # This is safe because the legacy key proves this game was posted,
+            # while subsequent campaigns will have a distinct start timestamp.
+            migrated_legacy_keys.add(old_key)
+            seen.add(key)
+            log.info("Migrated legacy sent-game marker for %s without reposting its current offer", game.get("title"))
+            continue
+        new_games.append((key, game))
     log.info(
         "Fetched %s API records; %s unique free offers; %s not yet posted; scan_complete=%s",
         len(games),
