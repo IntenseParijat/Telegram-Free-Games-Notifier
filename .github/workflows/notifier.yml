@@ -41,7 +41,6 @@ jobs:
 
       - name: Run notifier
         id: notifier
-        continue-on-error: true
         env:
           FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -92,25 +91,14 @@ jobs:
 
       - name: Write workflow summary
         if: always()
-        env:
-          NOTIFIER_OUTCOME: ${{ steps.notifier.outcome }}
         run: |
           {
             echo "## Free Game Notifier"
             echo
             echo "- Python syntax validation completed before notifier execution."
-            echo "- Notifier outcome: $NOTIFIER_OUTCOME"
-            if [[ "$NOTIFIER_OUTCOME" == "success" ]]; then
-              echo "- Result: completed successfully."
-            elif [[ "$NOTIFIER_OUTCOME" == "failure" ]]; then
-              echo "- Result: notifier encountered an error. See the job log for details."
-            fi
+            echo "- Job status before summary: ${{ job.status }}"
             echo "- Duplicate state is committed when changed."
             echo
             echo "See the notifier log above for API pagination and delivery details."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Report notifier failure without masking completed state saving
-        if: always() && steps.notifier.outcome == 'failure'
-        run: |
-          echo "::error::Notifier execution failed. See the notifier log for the cause."
