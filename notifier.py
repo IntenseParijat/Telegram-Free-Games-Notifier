@@ -161,6 +161,193 @@ def _fetch_platform_games(
     return platform_games, scan_complete
 
 
+MOBILE_EPIC_API_URL = "https://egs-platform-service.store.epicgames.com/api/v2/public/discover/home"
+
+
+def _mobile_price_amount(value: Any) -> float:
+    """Normalize Epic mobile price values (usually integer minor units)."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    # Epic storefront payloads normally express prices as cents.
+    return amount / 100 if amount > 100 else amount
+
+
+def fetch_epic_mobile_platform(
+    session: requests.Session,
+    platform: str,
+) -> list[dict[str, Any]]:
+    """Fetch mobile products and normalize active free-to-keep promotions.
+
+    The mobile storefront endpoint is separate from Epic's regular PC free-games
+    promotions feed. It returns products with platform-specific pricing and
+    action data. Only products with an explicit active free claim action and
+    a positive normal price are converted into notifier records.
+    """
+    params = {
+        "count": 50,
+        "country": os.getenv("EPIC_COUNTRY", "US"),
+        "locale": os.getenv("EPIC_LOCALE", "en"),
+        "platform": platform,
+        "start": 0,
+        "store": "EGS",
+    }
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Telegram-Free-Games-Notifier/1.0",
+        "Origin": "https://store.epicgames.com",
+        "Referer": "https://store.epicgames.com/",
+    }
+    try:
+        response = session.get(MOBILE_EPIC_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"Could not fetch Epic {platform} mobile offers: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response")
+    raw_items = payload.get("data") or payload.get("elements") or payload.get("items") or []
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get("elements") or raw_items.get("items") or []
+    if not isinstance(raw_items, list):
+        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected products list")
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        title = item.get("title") or item.get("name") or item.get("productName")
+        if not title:
+            continue
+
+        # Mobile discovery uses a mixture of catalog schemas. Require an
+        # explicit free claim affordance or a zero-price active promotion,
+        # and reject upcoming, unavailable, and already-owned states.
+        actions = item.get("actions") or item.get("offerActions") or []
+        if isinstance(actions, dict):
+            actions = [actions]
+        action_text = " ".join(
+            str(action.get(k) or "")
+            for action in actions if isinstance(action, dict)
+            for k in ("name", "label", "action", "type")
+        ).casefold()
+        action_urls = [
+            str(action.get(k))
+            for action in actions if isinstance(action, dict)
+            for k in ("url", "uri", "link")
+            if action.get(k)
+        ]
+
+        price_data = item.get("price") or item.get("pricing") or {}
+        if not isinstance(price_data, dict):
+            price_data = {}
+        total = price_data.get("totalPrice") or price_data.get("total_price") or price_data
+        if not isinstance(total, dict):
+            total = {}
+        original_raw = (
+            total.get("originalPrice") or total.get("original_price")
+            or item.get("originalPrice") or item.get("original_price")
+        )
+        discount_raw = (
+            total.get("discountPrice") if "discountPrice" in total else
+            total.get("discount_price") if "discount_price" in total else
+            item.get("discountPrice", item.get("discount_price"))
+        )
+        original_price = _mobile_price_amount(original_raw)
+        discount_price = _mobile_price_amount(discount_raw)
+
+        promotion = item.get("promotion") or item.get("promotions") or {}
+        if isinstance(promotion, list):
+            promotion = promotion[0] if promotion else {}
+        if not isinstance(promotion, dict):
+            promotion = {}
+        start_value = (
+            promotion.get("startDate") or promotion.get("start_date")
+            or item.get("startDate") or item.get("start_date")
+        )
+        end_value = (
+            promotion.get("endDate") or promotion.get("end_date")
+            or item.get("endDate") or item.get("end_date")
+        )
+
+        active_flag = item.get("isFree") is True or item.get("is_free") is True
+        claim_action = any(word in action_text for word in ("claim", "get", "free"))
+        explicit_zero_price = discount_raw is not None and discount_price == 0
+        if not (claim_action or active_flag or explicit_zero_price):
+            continue
+        if original_price <= 0:
+            continue
+        if discount_raw is not None and discount_price != 0:
+            continue
+        if not end_value:
+            continue
+
+        store_url = (
+            item.get("productUrl") or item.get("product_url")
+            or item.get("url") or item.get("storeUrl")
+        )
+        if not store_url and item.get("urlSlug"):
+            store_url = f"https://store.epicgames.com/p/{item['urlSlug']}"
+        if not store_url and item.get("slug"):
+            store_url = f"https://store.epicgames.com/p/{item['slug']}"
+        if not store_url and item.get("offerId"):
+            store_url = f"https://store.epicgames.com/p/{item['offerId']}"
+        if not store_url:
+            continue
+
+        image = item.get("keyImages") or item.get("images") or item.get("image") or []
+        if isinstance(image, dict):
+            image = [image]
+        image_url = None
+        for image_item in image:
+            if isinstance(image_item, dict):
+                image_url = image_item.get("url") or image_item.get("src")
+                if image_url:
+                    break
+
+        description = item.get("description") or item.get("shortDescription") or ""
+        identifier = (
+            item.get("offerId") or item.get("id") or item.get("productId")
+            or item.get("namespace") or item.get("urlSlug") or str(title)
+        )
+        normalized.append({
+            "title": str(title),
+            "description": str(description),
+            "platform": f"Epic ({platform.title()})",
+            "game_id": str(identifier),
+            "id": str(identifier),
+            "is_free": True,
+            "original_price": original_price,
+            "final_price": 0,
+            "discount_price": 0,
+            "start_date": start_value,
+            "end_date": end_value,
+            "game_url": valid_http_url(store_url),
+            "image_url": valid_http_url(image_url),
+            "type": "BASE_GAME",
+            "offer_type": "BASE_GAME",
+            "source": "Epic mobile storefront",
+        })
+
+    log.info("Epic %s mobile storefront returned %s products; %s active free offers qualified", platform, len(raw_items), len(normalized))
+    return normalized
+
+
+def fetch_epic_mobile_games(session: requests.Session) -> list[dict[str, Any]]:
+    games: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for platform in ("android", "ios"):
+        for game in fetch_epic_mobile_platform(session, platform):
+            key = game_key(game)
+            if key not in seen:
+                seen.add(key)
+                games.append(game)
+    return games
+
+
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch independently paginated store feeds and merge them before filtering."""
     platforms: tuple[str, ...] = ("Epic", "Steam", "GOG", "Other")
@@ -185,6 +372,20 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 "Merged %s feed: %s records received, %s unique records added",
                 platform, len(games), added,
             )
+
+        mobile_games = fetch_epic_mobile_games(session)
+        mobile_added = 0
+        for game in mobile_games:
+            key = game_key(game)
+            if key in seen_global:
+                continue
+            seen_global.add(key)
+            all_games.append(game)
+            mobile_added += 1
+        log.info(
+            "Merged Epic mobile feeds: %s qualified records, %s unique records added",
+            len(mobile_games), mobile_added,
+        )
 
     log.info(
         "Combined catalogue: %s unique API records; aggregate scan_complete=%s",
