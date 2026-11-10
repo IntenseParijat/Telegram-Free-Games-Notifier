@@ -61,14 +61,10 @@ def fetch_page(
     if platform:
         params["platform"] = platform
 
+    last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = session.get(
-                API_URL,
-                headers=headers,
-                params=params,
-                timeout=REQUEST_TIMEOUT,
-            )
+            response = session.get(API_URL, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
             if response.status_code == 429 or response.status_code >= 500:
                 retry_after = response.headers.get("Retry-After", "")
                 try:
@@ -91,30 +87,20 @@ def fetch_page(
             if payload.get("success") is not True or not isinstance(payload.get("data"), list):
                 raise RuntimeError(f"Unexpected API response for {platform or 'all-platform'} page {page}: success/data missing")
             return payload
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
             if attempt == MAX_RETRIES:
-                raise RuntimeError(
-                    f"Could not fetch {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
-                ) from exc
+                break
             wait = min(2 ** attempt, 60)
             log.warning(
                 "%s page %s request failed (%s); retrying in %ss",
                 platform or "All-platform", page, exc, wait,
             )
             time.sleep(wait)
-        except ValueError as exc:
-            if attempt == MAX_RETRIES:
-                raise RuntimeError(
-                    f"Invalid JSON from {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
-                ) from exc
-            wait = min(2 ** attempt, 60)
-            log.warning(
-                "%s page %s returned invalid JSON (%s); retrying in %ss",
-                platform or "All-platform", page, exc, wait,
-            )
-            time.sleep(wait)
 
-    raise RuntimeError(f"Failed to fetch {platform or 'all-platform'} API page {page}")
+    raise RuntimeError(
+        f"Could not fetch {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
+    ) from last_error
 
 
 def _fetch_platform_games(
@@ -176,13 +162,8 @@ def _fetch_platform_games(
 
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
-    """Fetch independent platform feeds and merge them before filtering.
-
-    The aggregate scan is complete only when every platform feed reaches its
-    documented empty-page terminator. A repeated page on one feed is recorded
-    as partial but does not discard records from other feeds.
-    """
-    platforms: tuple[str | None, ...] = ("Epic", "Steam", "GOG", "Other")
+    """Fetch independently paginated store feeds and merge them before filtering."""
+    platforms: tuple[str, ...] = ("Epic", "Steam", "GOG", "Other")
     all_games: list[dict[str, Any]] = []
     seen_global: set[str] = set()
     all_complete = True
@@ -202,7 +183,7 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 added += 1
             log.info(
                 "Merged %s feed: %s records received, %s unique records added",
-                platform or "all-platform", len(games), added,
+                platform, len(games), added,
             )
 
     log.info(
@@ -210,19 +191,6 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
         len(all_games), all_complete,
     )
     return all_games, all_complete
-
-def platform_family(value: Any) -> str:
-    """Normalize API platform labels into the documented feed families."""
-    text = _normalised_text(value)
-    if any(term in text for term in ("epic", "egs")):
-        return "epic"
-    if "steam" in text:
-        return "steam"
-    if any(term in text for term in ("gog", "good old games")):
-        return "gog"
-    if not text:
-        return "unknown"
-    return text
 
 
 def _offer_start_value(game: dict[str, Any]) -> Any:
