@@ -208,152 +208,119 @@ def fetch_epic_mobile_platform(
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response")
-    # The current mobile discovery response nests product cards in
-    # data.Catalog.searchStore.elements. Keep compatibility with older
-    # response envelopes as fallbacks.
-    raw_items: Any = payload.get("data") or payload.get("elements") or payload.get("items") or []
-    if isinstance(raw_items, dict):
-        catalog = raw_items.get("Catalog") or raw_items.get("catalog") or {}
-        search_store = catalog.get("searchStore") or catalog.get("search_store") or {}
-        raw_items = (
-            search_store.get("elements")
-            or raw_items.get("elements")
-            or raw_items.get("items")
-            or []
-        )
-    if not isinstance(raw_items, list):
-        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected products list")
+    sections = payload.get("data") or []
+    if not isinstance(sections, list):
+        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected sections list")
 
     normalized: list[dict[str, Any]] = []
-    for item in raw_items:
-        if not isinstance(item, dict):
+    for section in sections:
+        if not isinstance(section, dict) or section.get("type") != "freeGame":
             continue
 
-        title = item.get("title") or item.get("name") or item.get("productName")
-        if not title:
-            continue
-
-        # Mobile discovery uses a mixture of catalog schemas. Require an
-        # explicit free claim affordance or a zero-price active promotion,
-        # and reject upcoming, unavailable, and already-owned states.
-        # Epic's mobile discover endpoint places the offer summary and its
-        # pricing in nested structures. Do not infer a giveaway from a generic
-        # free button: require both a positive normal price and explicit zero
-        # promotional price, plus a current promotion expiry.
-        nested_offer = item.get("offer") or item.get("product") or {}
-        if not isinstance(nested_offer, dict):
-            nested_offer = {}
-
-        price_data = (
-            item.get("price") or item.get("pricing")
-            or nested_offer.get("price") or nested_offer.get("pricing") or {}
-        )
-        if not isinstance(price_data, dict):
-            price_data = {}
-        total = price_data.get("totalPrice") or price_data.get("total_price") or price_data
-        if not isinstance(total, dict):
-            total = {}
-
-        original_raw = (
-            total.get("originalPrice") if "originalPrice" in total else
-            total.get("original_price") if "original_price" in total else
-            item.get("originalPrice", item.get("original_price"))
-        )
-        discount_raw = (
-            total.get("discountPrice") if "discountPrice" in total else
-            total.get("discount_price") if "discount_price" in total else
-            item.get("discountPrice", item.get("discount_price"))
-        )
-        original_price = _mobile_price_amount(original_raw)
-        discount_price = _mobile_price_amount(discount_raw)
-        if original_price <= 0 or discount_raw is None or discount_price != 0:
-            continue
-
-        promotion = (
-            item.get("promotion") or item.get("promotions")
-            or nested_offer.get("promotion") or nested_offer.get("promotions") or {}
-        )
-        if isinstance(promotion, list):
-            promotion_groups = promotion
-        elif isinstance(promotion, dict):
-            promotion_groups = promotion.get("promotionalOffers") or promotion.get("promotional_offers") or [promotion]
-        else:
-            promotion_groups = []
-
-        active_promotions: list[dict[str, Any]] = []
-        for group in promotion_groups:
-            if not isinstance(group, dict):
+        offers = section.get("offers") or []
+        for offer in offers:
+            if not isinstance(offer, dict):
                 continue
-            offers = group.get("promotionalOffers") or group.get("offers") or [group]
-            for offer in offers:
-                if isinstance(offer, dict):
-                    active_promotions.append(offer)
+            content = offer.get("content") or {}
+            if not isinstance(content, dict):
+                continue
 
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        current_promotions: list[dict[str, Any]] = []
-        for offer in active_promotions:
-            start_at = _parse_offer_datetime(offer.get("startDate") or offer.get("start_date"))
-            end_at = _parse_offer_datetime(offer.get("endDate") or offer.get("end_date"))
-            if end_at and end_at > now and (start_at is None or start_at <= now):
-                current_promotions.append(offer)
-        if not current_promotions:
-            continue
+            slug = (content.get("mapping") or {}).get("slug")
+            if not slug:
+                continue
 
-        active_offer = current_promotions[0]
-        start_value = active_offer.get("startDate") or active_offer.get("start_date")
-        end_value = active_offer.get("endDate") or active_offer.get("end_date")
-
-        store_url = (
-            item.get("productUrl") or item.get("product_url")
-            or item.get("url") or item.get("storeUrl")
-        )
-        if not store_url and item.get("urlSlug"):
-            store_url = f"https://store.epicgames.com/p/{item['urlSlug']}"
-        if not store_url and item.get("slug"):
-            store_url = f"https://store.epicgames.com/p/{item['slug']}"
-        if not store_url and item.get("offerId"):
-            store_url = f"https://store.epicgames.com/p/{item['offerId']}"
-        if not store_url:
-            continue
-
-        image = item.get("keyImages") or item.get("images") or item.get("image") or []
-        if isinstance(image, dict):
-            image = [image]
-        image_url = None
-        for image_item in image:
-            if isinstance(image_item, dict):
-                image_url = image_item.get("url") or image_item.get("src")
-                if image_url:
+            # This is Epic's actual mobile claim signal: the free entry is a
+            # Claim purchase with a zero decimal price. A paid offer for the
+            # same item may coexist, so do not accept a generic product listing.
+            claim_entry = None
+            for purchase in content.get("purchase") or []:
+                if not isinstance(purchase, dict):
+                    continue
+                purchase_price = purchase.get("price") or {}
+                try:
+                    decimal_price = float(purchase_price.get("decimalPrice"))
+                except (TypeError, ValueError):
+                    continue
+                if purchase.get("purchaseType") == "Claim" and decimal_price == 0:
+                    claim_entry = purchase
                     break
+            if claim_entry is None:
+                continue
 
-        description = item.get("description") or item.get("shortDescription") or ""
-        identifier = (
-            item.get("offerId") or item.get("id") or item.get("productId")
-            or item.get("namespace") or item.get("urlSlug") or str(title)
-        )
-        normalized.append({
-            "title": str(title),
-            "description": str(description),
-            "platform": f"Epic ({platform.title()})",
-            "game_id": str(identifier),
-            "id": str(identifier),
-            "is_free": True,
-            "original_price": original_price,
-            "final_price": 0,
-            "discount_price": 0,
-            "start_date": start_value,
-            "end_date": end_value,
-            "game_url": valid_http_url(store_url),
-            "image_url": valid_http_url(image_url),
-            "type": "BASE_GAME",
-            "offer_type": "BASE_GAME",
-            "source": "Epic mobile storefront",
-        })
+            title = content.get("title") or "Unknown"
+            original_price = 0.0
+            for purchase in content.get("purchase") or []:
+                if not isinstance(purchase, dict) or purchase is claim_entry:
+                    continue
+                purchase_price = purchase.get("price") or {}
+                try:
+                    candidate = float(purchase_price.get("decimalPrice"))
+                except (TypeError, ValueError):
+                    continue
+                if candidate > 0:
+                    original_price = candidate
+                    break
+            if original_price <= 0:
+                # Epic sometimes exposes the usual value on the Claim entry
+                # while the paid entry is absent from the mobile card. A
+                # mobile offer without a verified positive normal price is
+                # not sufficiently grounded for the paid-game eligibility rule.
+                continue
 
-    log.info("Epic %s mobile storefront returned %s products; %s active free offers qualified", platform, len(raw_items), len(normalized))
+            page_url = f"https://store.epicgames.com/en-US/p/{slug}"
+            start_value = (
+                claim_entry.get("startDate") or claim_entry.get("start_date")
+                or content.get("startDate") or content.get("start_date")
+            )
+            end_value = (
+                claim_entry.get("endDate") or claim_entry.get("end_date")
+                or content.get("endDate") or content.get("end_date")
+            )
+            if not end_value:
+                # The mobile endpoint often exposes only the Claim state and
+                # not its expiry. Do not fabricate a date or assume a 7-day
+                # duration. Such a product cannot pass our timed-offer gate.
+                log.info("Epic %s mobile: %s has no expiry timestamp; skipping", platform, title)
+                continue
+
+            description = content.get("description") or content.get("shortDescription") or ""
+            identifier = (
+                content.get("id") or content.get("productId")
+                or content.get("namespace") or slug
+            )
+            image = content.get("keyImages") or content.get("images") or []
+            image_url = None
+            if isinstance(image, list):
+                for image_item in image:
+                    if isinstance(image_item, dict):
+                        image_url = image_item.get("url")
+                        if image_url:
+                            break
+
+            normalized.append({
+                "title": str(title),
+                "description": str(description),
+                "platform": f"Epic ({platform.title()})",
+                "game_id": str(identifier),
+                "id": str(identifier),
+                "is_free": True,
+                "original_price": original_price,
+                "final_price": 0,
+                "discount_price": 0,
+                "start_date": start_value,
+                "end_date": end_value,
+                "game_url": page_url,
+                "image_url": valid_http_url(image_url),
+                "type": "BASE_GAME",
+                "offer_type": "BASE_GAME",
+                "source": "Epic mobile storefront",
+            })
+
+    log.info(
+        "Epic %s mobile storefront returned %s sections; %s active free offers qualified",
+        platform, len(sections), len(normalized),
+    )
     return normalized
-
 
 def fetch_epic_mobile_games(session: requests.Session) -> list[dict[str, Any]]:
     games: list[dict[str, Any]] = []
