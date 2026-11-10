@@ -524,7 +524,16 @@ def _normalised_text(value: Any) -> str:
 def _parse_offer_datetime(value: Any):
     from datetime import datetime, timezone
 
-    raw = str(value or "").strip()
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            parsed = datetime.fromtimestamp(value, tz=timezone.utc)
+            return parsed
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    raw = str(value).strip()
     if not raw:
         return None
     try:
@@ -541,6 +550,98 @@ def _parse_offer_datetime(value: Any):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def eligibility_rejection_reason(game: dict[str, Any]) -> str:
+    """Explain the first reason an API record is excluded."""
+    if not isinstance(game, dict):
+        return "malformed_record"
+
+    is_free_value = game.get("is_free")
+    is_free = (
+        is_free_value
+        if isinstance(is_free_value, bool)
+        else str(is_free_value or "").strip().casefold() in {"1", "true", "yes", "y"}
+    )
+    if not is_free:
+        return "is_free_false_or_missing"
+
+    end_value = (
+        game.get("end_date") or game.get("endDate")
+        or game.get("offer_end_date") or game.get("offerEndDate")
+        or game.get("free_until") or game.get("freeUntil")
+        or game.get("claim_end_date") or game.get("claimEndDate")
+        or game.get("promotion_end_date") or game.get("promotionEndDate")
+        or game.get("offer_expires_at") or game.get("expires_at")
+        or game.get("ends_at")
+    )
+    end_at = _parse_offer_datetime(end_value)
+    from datetime import datetime, timezone
+    if end_at is None:
+        return "missing_or_unparseable_expiry"
+    now_at = datetime.now(timezone.utc)
+    if end_at <= now_at:
+        return "offer_expired"
+
+    original = (
+        game.get("original_price") or game.get("originalPrice")
+        or game.get("regular_price") or game.get("regularPrice")
+        or game.get("retail_price") or game.get("retailPrice")
+    )
+    try:
+        original_amount = float(re.sub(r"[^0-9.]", "", str(original or "")))
+    except ValueError:
+        original_amount = 0.0
+    if original_amount <= 0:
+        return "missing_positive_original_price"
+
+    def flatten(value: Any) -> str:
+        if isinstance(value, dict):
+            return " ".join(flatten(v) for v in value.values())
+        if isinstance(value, (list, tuple, set)):
+            return " ".join(flatten(v) for v in value)
+        return _normalised_text(value)
+
+    searchable = " ".join(
+        flatten(game.get(field))
+        for field in (
+            "type", "offer_type", "offerType", "access_type", "entitlement_type",
+            "subscription", "subscription_name", "source", "availability_type",
+            "included_with", "included_in", "is_subscription", "description",
+        )
+    )
+    excluded_phrases = (
+        "game pass", "xbox game pass", "pc game pass", "playstation plus",
+        "ps plus", "subscription", "included with", "included in pass",
+        "game catalog", "game catalogue", "permanently free",
+    )
+    if any(_normalised_text(term) in searchable for term in excluded_phrases):
+        return "subscription_or_permanent_free_marker"
+    if game.get("is_subscription") is True or game.get("subscription_included") is True:
+        return "subscription_marker"
+    has_subscription_marker = any(
+        field in game
+        for field in ("subscription", "subscription_name", "is_subscription", "subscription_included")
+    )
+    if has_subscription_marker and any(
+        game.get(field) not in (None, "", False, 0)
+        for field in ("subscription", "subscription_name")
+    ):
+        return "subscription_metadata"
+
+    classification = " ".join(
+        flatten(game.get(field))
+        for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type", "description")
+    )
+    permanent_free_markers = ("free to play", "free to start", "free2play", "f2p", "permanently free")
+    if any(_normalised_text(term) in classification for term in permanent_free_markers):
+        return "free_to_play_marker"
+
+    offer_type = _normalised_text(game.get("type") or game.get("offer_type") or game.get("offerType"))
+    if any(term in offer_type for term in ("dlc", "loot", "beta", "in game")):
+        return "non_standalone_game_offer"
+
+    return "eligible"
 
 
 def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
@@ -660,9 +761,14 @@ async def run_notifier() -> None:
         return
 
     current_games: dict[str, dict[str, Any]] = {}
+    rejection_counts: dict[str, int] = {}
     for game in games:
         if is_eligible_temporary_offer(game):
             current_games[game_key(game)] = game
+        else:
+            reason = eligibility_rejection_reason(game)
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+    log.info("Eligibility rejection breakdown: %s", json.dumps(rejection_counts, sort_keys=True))
     log.info(
         "Eligibility filter retained %s of %s API records; only active temporary paid-game offers qualify",
         len(current_games),
