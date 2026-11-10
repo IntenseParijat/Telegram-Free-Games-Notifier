@@ -182,7 +182,7 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     documented empty-page terminator. A repeated page on one feed is recorded
     as partial but does not discard records from other feeds.
     """
-    platforms: tuple[str | None, ...] = (None, "Epic", "Steam", "GOG", "Other")
+    platforms: tuple[str | None, ...] = ("Epic", "Steam", "GOG", "Other")
     all_games: list[dict[str, Any]] = []
     seen_global: set[str] = set()
     all_complete = True
@@ -210,6 +210,20 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
         len(all_games), all_complete,
     )
     return all_games, all_complete
+
+def platform_family(value: Any) -> str:
+    """Normalize API platform labels into the documented feed families."""
+    text = _normalised_text(value)
+    if any(term in text for term in ("epic", "egs")):
+        return "epic"
+    if "steam" in text:
+        return "steam"
+    if any(term in text for term in ("gog", "good old games")):
+        return "gog"
+    if not text:
+        return "unknown"
+    return text
+
 
 def _offer_start_value(game: dict[str, Any]) -> Any:
     """Return the best available timestamp identifying this specific giveaway."""
