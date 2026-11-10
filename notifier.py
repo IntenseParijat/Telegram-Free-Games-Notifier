@@ -239,6 +239,16 @@ def fetch_epic_mobile_platform(
         actions = item.get("actions") or item.get("offerActions") or []
         if isinstance(actions, dict):
             actions = [actions]
+        # Epic mobile discover/home stores offer states under catalog pricing
+        # and may expose button actions either on the item or its nested
+        # offer/product summary.
+        nested_offer = item.get("offer") or item.get("product") or {}
+        if not isinstance(nested_offer, dict):
+            nested_offer = {}
+        if not actions:
+            actions = nested_offer.get("actions") or nested_offer.get("offerActions") or []
+            if isinstance(actions, dict):
+                actions = [actions]
         action_text = " ".join(
             str(action.get(k) or "")
             for action in actions if isinstance(action, dict)
@@ -251,7 +261,10 @@ def fetch_epic_mobile_platform(
             if action.get(k)
         ]
 
-        price_data = item.get("price") or item.get("pricing") or {}
+        price_data = (
+            item.get("price") or item.get("pricing")
+            or nested_offer.get("price") or nested_offer.get("pricing") or {}
+        )
         if not isinstance(price_data, dict):
             price_data = {}
         total = price_data.get("totalPrice") or price_data.get("total_price") or price_data
@@ -269,7 +282,10 @@ def fetch_epic_mobile_platform(
         original_price = _mobile_price_amount(original_raw)
         discount_price = _mobile_price_amount(discount_raw)
 
-        promotion = item.get("promotion") or item.get("promotions") or {}
+        promotion = (
+            item.get("promotion") or item.get("promotions")
+            or nested_offer.get("promotion") or nested_offer.get("promotions") or {}
+        )
         if isinstance(promotion, list):
             promotion = promotion[0] if promotion else {}
         if not isinstance(promotion, dict):
