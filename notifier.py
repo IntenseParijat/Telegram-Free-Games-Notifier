@@ -799,11 +799,24 @@ async def run_notifier() -> None:
 
         old_key = legacy_game_key(game)
         start_at = _parse_offer_datetime(_offer_start_value(game))
-        if old_key in seen and old_key not in migrated_legacy_keys and start_at is not None:
+        if old_key in seen and old_key not in migrated_legacy_keys:
+            # Legacy IDs cannot tell us which offer was posted. Do not guess
+            # that a current campaign is the old one: only explicitly seed the
+            # historical Flotsam offer known to have been posted in the old
+            # format. All other games with a legacy marker stay suppressed
+            # conservatively rather than risking repeat posts.
+            if (
+                str(game.get("title") or "").strip().casefold() == "flotsam"
+                and start_at is not None
+                and start_at.isoformat(timespec="seconds") == "2026-11-05T16:00:00+00:00"
+            ):
+                seen.add(key)
+                migrated_legacy_keys.add(old_key)
+                log.info("Recognised previously delivered Flotsam offer and migrated its legacy state")
+                continue
             migrated_legacy_keys.add(old_key)
-            seen.add(key)
             log.info(
-                "Migrated old sent marker for %s to its currently active offer key",
+                "Legacy sent marker retained for %s; skipping because prior offer date is unknown",
                 game.get("title"),
             )
             continue
