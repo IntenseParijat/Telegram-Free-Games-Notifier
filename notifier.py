@@ -208,9 +208,19 @@ def fetch_epic_mobile_platform(
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response")
-    raw_items = payload.get("data") or payload.get("elements") or payload.get("items") or []
+    # The current mobile discovery response nests product cards in
+    # data.Catalog.searchStore.elements. Keep compatibility with older
+    # response envelopes as fallbacks.
+    raw_items: Any = payload.get("data") or payload.get("elements") or payload.get("items") or []
     if isinstance(raw_items, dict):
-        raw_items = raw_items.get("elements") or raw_items.get("items") or []
+        catalog = raw_items.get("Catalog") or raw_items.get("catalog") or {}
+        search_store = catalog.get("searchStore") or catalog.get("search_store") or {}
+        raw_items = (
+            search_store.get("elements")
+            or raw_items.get("elements")
+            or raw_items.get("items")
+            or []
+        )
     if not isinstance(raw_items, list):
         raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected products list")
 
