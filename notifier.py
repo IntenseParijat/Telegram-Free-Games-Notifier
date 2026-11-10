@@ -917,7 +917,15 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         field in game
         for field in ("subscription", "subscription_name", "is_subscription", "subscription_included")
     )
-    if any(_normalised_text(term) in searchable for term in excluded_phrases):
+    # Epic mobile storefront records are normalized from a distinct mobile
+    # endpoint. Do not mistake the descriptive source label for subscription
+    # access; all other subscription markers and phrases remain excluded.
+    is_epic_mobile_source = _normalised_text(game.get("source")) == "epic mobile storefront"
+    if any(
+        _normalised_text(term) in searchable
+        for term in excluded_phrases
+        if not (is_epic_mobile_source and _normalised_text(term) == "subscription")
+    ):
         return False
     if game.get("is_subscription") is True or game.get("subscription_included") is True:
         return False
