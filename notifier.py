@@ -391,7 +391,7 @@ def fetch_epic_mobile_games(session: requests.Session) -> tuple[list[dict[str, A
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch independently paginated store feeds and merge them before filtering."""
-    platforms: tuple[str, ...] = ("Epic", "Steam", "GOG", "Other")
+    platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
     all_games: list[dict[str, Any]] = []
     seen_global: set[str] = set()
     all_complete = True
