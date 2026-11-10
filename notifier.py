@@ -587,21 +587,14 @@ async def run_notifier() -> None:
         log.info("Initialized duplicate state with %s listings; first-run posting disabled", len(current_games))
         return
 
-    # Migrate old game-only markers without reposting those already-seen
-    # offers. A legacy marker suppresses the first offer timestamp we encounter
-    # for that game, then the new offer-specific key is stored after delivery.
-    # Later offers with a different start time receive a distinct key.
-    new_games: list[tuple[str, dict[str, Any]]] = []
-    for key, game in current_games.items():
-        if key in seen:
-            continue
-        old_key = legacy_game_key(game)
-        if old_key in seen:
-            # Treat the old marker as identifying the currently observed offer
-            # once. Recording the offer key migrates it to the new state format.
-            seen.add(key)
-            continue
-        new_games.append((key, game))
+    # The legacy game-only key does not identify a specific promotion.
+    # Keep it as historical state, but never let it suppress an offer-specific
+    # key: doing so would lose the first new giveaway after this upgrade.
+    new_games = [
+        (key, game)
+        for key, game in current_games.items()
+        if key not in seen
+    ]
     log.info(
         "Fetched %s API records; %s unique free offers; %s not yet posted; scan_complete=%s",
         len(games),
@@ -613,10 +606,18 @@ async def run_notifier() -> None:
     if not new_games:
         if first_run and scan_complete:
             save_state(set(current_games))
-        if scan_complete:
-            log.info("No new free games")
+        if not scan_complete:
+            # The source returned a repeated page, but every eligible offer we
+            # actually received is already in persistent state. There is
+            # nothing safe to deliver or mark seen, so this is a successful
+            # no-op with an explicit warning, not a notifier failure.
+            log.warning(
+                "FreeGameRadar pagination was partial, but no unseen eligible offers were found "
+                "in the records returned. State was left unchanged; the next scheduled run will retry."
+            )
             return
-        raise RuntimeError("FreeGameRadar pagination was partial. State was not changed; retry next scheduled run.")
+        log.info("No new free games")
+        return
 
     client = TelegramClient(StringSession(session_string), api_id, api_hash)
     await client.connect()
