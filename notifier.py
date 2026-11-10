@@ -187,8 +187,8 @@ def fetch_epic_mobile_platform(
     """
     params = {
         "count": 10,
-        "country": os.getenv("EPIC_COUNTRY", "US"),
-        "locale": os.getenv("EPIC_LOCALE", "en-US"),
+        "country": os.getenv("EPIC_COUNTRY", "IN"),
+        "locale": os.getenv("EPIC_LOCALE", "en-IN"),
         "platform": platform,
         "start": 0,
         "store": "EGS",
