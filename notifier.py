@@ -65,6 +65,11 @@ def _api_response_data(payload: Any, context: str) -> tuple[list[dict[str, Any]]
     meta = payload.get("pagination") or payload.get("meta") or payload.get("pages") or {}
     if not isinstance(meta, dict):
         meta = {}
+    # Some wrappers put page fields in meta.pagination rather than the
+    # top-level metadata object.
+    nested = meta.get("pagination") or meta.get("page") or {}
+    if isinstance(nested, dict):
+        meta = {**meta, **nested}
     return [x for x in records if isinstance(x, dict)], meta
 
 
@@ -199,14 +204,20 @@ def _fetch_platform_games(
         payload = fetch_page(session, page, api_key, platform, limit=limit)
         records, meta = _api_response_data(payload, f"{label} page {page}")
         if page == 1:
-            for total_key in ("totalPages", "total_pages", "pages", "lastPage"):
+            for total_key in (
+                "totalPages", "total_pages", "pages", "lastPage", "last_page",
+                "last_page_number", "page_count",
+            ):
                 if meta.get(total_key) is not None:
                     try:
                         expected_total_pages = int(meta[total_key])
                     except (TypeError, ValueError):
                         pass
                     break
-            for total_key in ("total", "totalItems", "total_items", "count"):
+            for total_key in (
+                "total", "totalItems", "total_items", "count", "total_records",
+                "totalResults", "total_results",
+            ):
                 if meta.get(total_key) is not None:
                     try:
                         expected_total = int(meta[total_key])
@@ -257,8 +268,19 @@ def _fetch_platform_games(
             scan_complete = True
             break
         if len(records) < limit:
-            # A short page is terminal only when there is no contradictory
-            # pagination metadata and no known server-side page duplication.
+            # A short page is terminal only when metadata does not explicitly
+            # advertise more pages or items.
+            metadata_says_more = (
+                expected_total_pages is not None and page < expected_total_pages
+            ) or (
+                expected_total is not None and len(records_all) < expected_total
+            )
+            if metadata_says_more:
+                log.warning(
+                    "%s page %s was short (%s/%s) but metadata advertises more results; requesting next page",
+                    label, page, len(records), limit,
+                )
+                continue
             scan_complete = True
             break
 
