@@ -47,24 +47,60 @@ def required_env(name: str) -> str:
     return value
 
 
+GAMES_API_URL = "https://freegameradar.com/api/v1/developer/games"
+
+
+def _api_response_data(payload: Any, context: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise RuntimeError(f"Unexpected FreeGameRadar response for {context}")
+    raw = payload.get("data")
+    if isinstance(raw, list):
+        records = raw
+    elif isinstance(raw, dict):
+        records = raw.get("games") or raw.get("results") or raw.get("items") or []
+    else:
+        records = []
+    if not isinstance(records, list):
+        raise RuntimeError(f"Unexpected data array from FreeGameRadar for {context}")
+    meta = payload.get("pagination") or payload.get("meta") or payload.get("pages") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return [x for x in records if isinstance(x, dict)], meta
+
+
+def _api_limit_for_key(api_key: str | None) -> int:
+    # FreeGameRadar's documented caps: 25 anonymous, 100 standard key,
+    # 200 Pro. This repository uses an optional standard developer key.
+    # 100 is the largest documented request supported by that tier.
+    return 100 if api_key else 25
+
+
 def fetch_page(
     session: requests.Session,
     page: int,
     api_key: str | None,
     platform: str | None = None,
+    limit: int | None = None,
+    endpoint: str = API_URL,
+    search: str | None = None,
 ) -> dict[str, Any]:
     headers = {"Accept": "application/json", "User-Agent": "Telegram-Free-Games-Notifier/1.0"}
     if api_key:
         headers["X-API-Key"] = api_key
 
-    params: dict[str, Any] = {"page": page, "limit": PAGE_SIZE}
+    params: dict[str, Any] = {
+        "page": page,
+        "limit": min(max(int(limit or _api_limit_for_key(api_key)), 1), 200),
+    }
     if platform:
         params["platform"] = platform
+    if search:
+        params["search"] = search
 
     last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = session.get(API_URL, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+            response = session.get(endpoint, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
             if response.status_code == 429 or response.status_code >= 500:
                 retry_after = response.headers.get("Retry-After", "")
                 try:
@@ -74,18 +110,18 @@ def fetch_page(
                 if attempt == MAX_RETRIES:
                     response.raise_for_status()
                 log.warning(
-                    "API returned HTTP %s for %s page %s; retrying in %ss",
-                    response.status_code, platform or "all-platform", page, wait,
+                    "FreeGameRadar HTTP %s (%s page %s, limit %s); retrying in %ss",
+                    response.status_code, platform or "all-platform", page, params["limit"], wait,
                 )
                 time.sleep(wait)
                 continue
 
             response.raise_for_status()
             payload = response.json()
-            if not isinstance(payload, dict):
-                raise RuntimeError(f"Unexpected non-object API response for {platform or 'all-platform'} page {page}")
-            if payload.get("success") is not True or not isinstance(payload.get("data"), list):
-                raise RuntimeError(f"Unexpected API response for {platform or 'all-platform'} page {page}: success/data missing")
+            if not isinstance(payload, dict) or payload.get("success") is not True or not isinstance(payload.get("data"), (list, dict)):
+                raise RuntimeError(
+                    f"Unexpected FreeGameRadar response for {platform or 'all-platform'} page {page}"
+                )
             return payload
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
@@ -93,14 +129,22 @@ def fetch_page(
                 break
             wait = min(2 ** attempt, 60)
             log.warning(
-                "%s page %s request failed (%s); retrying in %ss",
-                platform or "All-platform", page, exc, wait,
+                "FreeGameRadar %s page %s request failed (%s); retrying in %ss",
+                platform or "all-platform", page, exc, wait,
             )
             time.sleep(wait)
 
     raise RuntimeError(
-        f"Could not fetch {platform or 'all-platform'} API page {page} after {MAX_RETRIES} attempts"
+        f"Could not fetch FreeGameRadar {platform or 'all-platform'} page {page} after {MAX_RETRIES} attempts"
     ) from last_error
+
+
+def _record_identity(record: dict[str, Any]) -> str:
+    for field in ("game_id", "id", "offer_id", "offerId", "slug", "url", "game_url", "title"):
+        value = record.get(field)
+        if value not in (None, ""):
+            return _normalised_text(value)
+    return json.dumps(record, sort_keys=True, ensure_ascii=False)
 
 
 def _fetch_platform_games(
@@ -108,58 +152,115 @@ def _fetch_platform_games(
     api_key: str | None,
     platform: str | None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Fetch one independently paginated platform feed."""
+    """Fetch one store's /free feed; verify actual page progression."""
     label = platform or "all-platform"
-    platform_games: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    seen_page_fingerprints: set[frozenset[str]] = set()
+    limit = _api_limit_for_key(api_key)
+    records_all: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    page_fingerprints: set[tuple[str, ...]] = set()
+    expected_total_pages: int | None = None
+    expected_total: int | None = None
     scan_complete = False
 
     for page in range(1, MAX_PAGES + 1):
-        payload = fetch_page(session, page, api_key, platform)
-        records = payload["data"]
+        payload = fetch_page(session, page, api_key, platform, limit=limit)
+        records, meta = _api_response_data(payload, f"{label} page {page}")
+        if page == 1:
+            for total_key in ("totalPages", "total_pages", "pages", "lastPage"):
+                if meta.get(total_key) is not None:
+                    try:
+                        expected_total_pages = int(meta[total_key])
+                    except (TypeError, ValueError):
+                        pass
+                    break
+            for total_key in ("total", "totalItems", "total_items", "count"):
+                if meta.get(total_key) is not None:
+                    try:
+                        expected_total = int(meta[total_key])
+                    except (TypeError, ValueError):
+                        pass
+                    break
+
         if not records:
             scan_complete = True
-            log.info("%s feed pagination ended normally at empty page %s", label, page)
+            log.info("%s page %s returned 0 records; pagination ended", label, page)
             break
 
-        valid_records = [record for record in records if isinstance(record, dict)]
-        page_keys = [game_key(record) for record in valid_records]
-        fingerprint = frozenset(page_keys)
-
-        if records and not valid_records:
-            log.warning("Ignoring %s malformed records in %s page %s", len(records), label, page)
-            continue
-
-        if fingerprint and fingerprint in seen_page_fingerprints:
-            log.warning(
-                "%s feed repeated page %s; this feed is PARTIAL after %s unique records",
-                label, page, len(platform_games),
+        ids = tuple(_record_identity(x) for x in records)
+        if ids in page_fingerprints:
+            log.error(
+                "%s page %s exactly repeated an earlier page (%s records). "
+                "The service appears to ignore the page parameter or cache page 1; scan is incomplete.",
+                label, page, len(records),
             )
             break
-        if fingerprint:
-            seen_page_fingerprints.add(fingerprint)
+        page_fingerprints.add(ids)
 
-        added_this_page = 0
-        for record, key in zip(valid_records, page_keys):
-            if key in seen_keys:
+        added = 0
+        for record in records:
+            identity = _record_identity(record)
+            if identity in seen_ids:
                 continue
-            seen_keys.add(key)
-            platform_games.append(record)
-            added_this_page += 1
+            seen_ids.add(identity)
+            records_all.append(record)
+            added += 1
 
         log.info(
-            "%s feed page %s: %s records, %s new, %s unique total",
-            label, page, len(records), added_this_page, len(platform_games),
+            "%s page %s/%s: received %s records, %s new, %s unique total (limit=%s, reported_total=%s)",
+            label,
+            page,
+            expected_total_pages if expected_total_pages is not None else "?",
+            len(records),
+            added,
+            len(records_all),
+            limit,
+            expected_total if expected_total is not None else "?",
         )
-        if added_this_page == 0:
-            log.warning("%s feed page %s contained no new records; stopping PARTIAL", label, page)
+
+        if expected_total_pages is not None and page >= expected_total_pages:
+            scan_complete = True
             break
+        if expected_total is not None and len(records_all) >= expected_total:
+            scan_complete = True
+            break
+        if len(records) < limit:
+            # A short page is terminal only when there is no contradictory
+            # pagination metadata and no known server-side page duplication.
+            scan_complete = True
+            break
+
     else:
-        log.warning("%s feed reached page safety limit; scan is PARTIAL", label)
+        log.error("%s reached the %s-page safety limit; scan is incomplete", label, MAX_PAGES)
 
-    return platform_games, scan_complete
+    if not scan_complete:
+        log.warning("%s scan incomplete: collected %s unique records", label, len(records_all))
+    return records_all, scan_complete
 
+
+def fetch_game_search(
+    session: requests.Session,
+    api_key: str | None,
+    search: str,
+    platform: str | None = None,
+) -> list[dict[str, Any]]:
+    """Use the documented /games?search= filter for targeted metadata recovery."""
+    label = f"search={search!r}" + (f", platform={platform}" if platform else "")
+    payload = fetch_page(
+        session, 1, api_key, platform, limit=min(_api_limit_for_key(api_key), 100),
+        endpoint=GAMES_API_URL, search=search,
+    )
+    records, _ = _api_response_data(payload, label)
+    log.info("FreeGameRadar /games %s returned %s records", label, len(records))
+    return records
+
+
+def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
+    """Fill absent/empty fields from a matching /games lookup without overwriting offer state."""
+    merged = dict(primary)
+    for key, value in secondary.items():
+        if merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    return merged
 
 MOBILE_EPIC_API_URL = "https://egs-platform-service.store.epicgames.com/api/v2/public/discover/home"
 
