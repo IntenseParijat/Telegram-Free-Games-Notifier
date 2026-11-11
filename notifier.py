@@ -347,10 +347,12 @@ def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> d
 
 
 def _canonical_game_title(value: Any) -> str:
-    """Normalize mobile giveaway source suffixes to the base game title."""
+    """Normalize store-specific giveaway titles to their base game title."""
     title = _normalised_text(value)
     suffix_patterns = (
         r"\\s+mobile\\s+giveaway$",
+        r"\\s+android\\s+ios\\s+giveaway$",
+        r"\\s+ios\\s+android\\s+giveaway$",
         r"\\s+giveaway$",
         r"\\s+mobile$",
         r"\\s+android$",
@@ -360,7 +362,7 @@ def _canonical_game_title(value: Any) -> str:
     while changed:
         changed = False
         for pattern in suffix_patterns:
-            normalized = re.sub(pattern, "", title).strip()
+            normalized = re.sub(pattern, "", title).strip(" -_()")
             if normalized != title:
                 title = normalized
                 changed = True
