@@ -893,13 +893,7 @@ def _offer_start_value(game: dict[str, Any]) -> Any:
 
 
 def game_key(game: dict[str, Any]) -> str:
-    """Identify one giveaway campaign while keeping platform stores separate.
-
-    For mobile giveaways discovered by more than one source, use normalized
-    title + offer start time so Epic's Android/iOS feed and GamerPower do not
-    send the same campaign twice. Non-mobile store listings retain their exact
-    platform + API-ID key, preserving the existing Flotsam state key.
-    """
+    """Identify a giveaway campaign, independent of its mobile discovery source."""
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     source = _normalised_text(game.get("source"))
     is_mobile_discovery = (
@@ -911,24 +905,35 @@ def game_key(game: dict[str, Any]) -> str:
 
     if is_mobile_discovery:
         identifier = _normalised_text(game.get("title"))
-    else:
-        identifier = str(game.get("game_id") or game.get("id") or "").strip()
-        if not identifier:
-            identifier = _normalised_text(game.get("title"))
+        # Track one mobile campaign across Epic and GamerPower. Prefer its
+        # ending calendar date because the two sources can express its start
+        # time differently; a later free period has a different end date.
+        end_value = (
+            game.get("end_date") or game.get("endDate")
+            or game.get("offer_end_date") or game.get("offerEndDate")
+            or game.get("free_until") or game.get("freeUntil")
+            or game.get("expires_at") or game.get("ends_at")
+        )
+        end_at = _parse_offer_datetime(end_value, date_only_end=True)
+        if end_at is not None:
+            return f"mobile:{identifier}:until:{end_at.date().isoformat()}"
+        start_at = _parse_offer_datetime(_offer_start_value(game))
+        if start_at is not None:
+            return f"mobile:{identifier}:offer:{start_at.isoformat(timespec='seconds').replace('+00:00', 'Z')}"
+        return f"mobile:{identifier}"
+
+    identifier = str(game.get("game_id") or game.get("id") or "").strip()
+    if not identifier:
+        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
 
     start_at = _parse_offer_datetime(_offer_start_value(game))
     if start_at is not None:
         offer_start = start_at.isoformat(timespec="seconds").replace("+00:00", "Z")
-        if is_mobile_discovery:
-            return f"mobile:{identifier}:offer:{offer_start}"
         return f"{platform}:{identifier}:offer:{offer_start}"
 
-    if is_mobile_discovery:
-        return f"mobile:{identifier}"
     return f"{platform}:{identifier}"
-
 
 def legacy_game_key(game: dict[str, Any]) -> str:
     """Return the pre-offer-tracking key for existing state migration."""
