@@ -812,6 +812,26 @@ def fetch_epic_mobile_games(session: requests.Session) -> tuple[list[dict[str, A
     return games, complete
 
 
+def merge_platform_labels(existing: Any, incoming: Any) -> str:
+    """Combine duplicated mobile platform labels without repeating store names."""
+    combined = " ".join((str(existing or ""), str(incoming or "")))
+    normalized = _normalised_text(combined)
+    mobile_platforms = [
+        label for label in ("Android", "iOS")
+        if label.casefold() in normalized.split()
+    ]
+    if mobile_platforms:
+        if "epic" in normalized:
+            return f"Epic ({', '.join(mobile_platforms)})"
+        return ", ".join(mobile_platforms)
+
+    values = []
+    for value in (str(existing or "").strip(), str(incoming or "").strip()):
+        if value and value not in values:
+            values.append(value)
+    return ", ".join(values)
+
+
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch every store independently, then mobile sources, preserving partial results."""
     platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
@@ -825,10 +845,9 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             key = game_key(game)
             existing = seen_global.get(key)
             if existing is not None:
-                old_platform = str(existing.get("platform") or "").strip()
-                new_platform = str(game.get("platform") or "").strip()
-                if new_platform and new_platform not in old_platform.split(", "):
-                    existing["platform"] = ", ".join(x for x in (old_platform, new_platform) if x)
+                existing["platform"] = merge_platform_labels(
+                    existing.get("platform"), game.get("platform")
+                )
                 for field in ("description", "image_url", "game_url"):
                     if existing.get(field) in (None, "") and game.get(field):
                         existing[field] = game[field]
@@ -905,6 +924,8 @@ def game_key(game: dict[str, Any]) -> str:
 
     if is_mobile_discovery:
         identifier = _normalised_text(game.get("title"))
+        identifier = re.sub(r"\\s+(?:android\\s+ios|ios\\s+android)$", "", identifier)
+        identifier = re.sub(r"\\s+(?:mobile|android|ios|giveaway)$", "", identifier)
         # Track one mobile campaign across Epic and GamerPower. Prefer its
         # ending calendar date because the two sources can express its start
         # time differently; a later free period has a different end date.
