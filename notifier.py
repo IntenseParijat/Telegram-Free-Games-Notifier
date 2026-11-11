@@ -304,21 +304,13 @@ def _fetch_platform_games(
             scan_complete = True
             break
         if len(records) < limit:
-            # A short page is terminal only when metadata does not explicitly
-            # advertise more pages or items.
-            metadata_says_more = (
-                expected_total_pages is not None and page < expected_total_pages
-            ) or (
-                expected_total is not None and len(records_all) < expected_total
+            # FreeGameRadar can return non-terminal short pages. Continue to
+            # the next numbered page; only an empty page or authoritative
+            # pagination metadata confirms the end of the feed.
+            log.info(
+                "%s page %s was short (%s/%s); checking page %s for continuation",
+                label, page, len(records), limit, page + 1,
             )
-            if metadata_says_more:
-                log.warning(
-                    "%s page %s was short (%s/%s) but metadata advertises more results; requesting next page",
-                    label, page, len(records), limit,
-                )
-                continue
-            scan_complete = True
-            break
 
     else:
         log.error("%s reached the %s-page safety limit; scan is incomplete", label, MAX_PAGES)
