@@ -1136,24 +1136,18 @@ def eligibility_rejection_reason(game: dict[str, Any]) -> str:
     return "eligible"
 
 
-def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
-    """Only admit active, free-to-keep offers, never permanent F2P or subscriptions.
-
-    FreeGameRadar documents /developer/free as the active 100%-free giveaways
-    feed. The docs list no offer-type query parameter, so page/limit remain the
-    only pagination parameters. This gate uses the returned record fields.
-    """
-    from datetime import datetime, timezone
-
+def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
+    """Explain the first reason an API record is excluded."""
     if not isinstance(game, dict):
-        return False
+        return "malformed_record"
     is_free_value = game.get("is_free")
-    if isinstance(is_free_value, bool):
-        is_free = is_free_value
-    else:
-        is_free = str(is_free_value or "").strip().casefold() in {"1", "true", "yes", "y"}
+    is_free = (
+        is_free_value
+        if isinstance(is_free_value, bool)
+        else str(is_free_value or "").strip().casefold() in {"1", "true", "yes", "y"}
+    )
     if not is_free:
-        return False
+        return "is_free_false_or_missing"
 
     end_value = (
         game.get("end_date") or game.get("endDate")
@@ -1165,24 +1159,24 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         or game.get("ends_at")
     )
     end_at = _parse_offer_datetime(end_value)
+    from datetime import datetime, timezone
     now_at = now or datetime.now(timezone.utc)
     if now_at.tzinfo is None:
         now_at = now_at.replace(tzinfo=timezone.utc)
-    if end_at is None or end_at <= now_at.astimezone(timezone.utc):
-        return False
+    if end_at is None:
+        return "missing_or_unparseable_expiry"
+    if end_at <= now_at.astimezone(timezone.utc):
+        return "offer_expired"
 
-    # A normally paid game must have a positive regular/retail value.
     original = (
         game.get("original_price") or game.get("originalPrice")
         or game.get("regular_price") or game.get("regularPrice")
         or game.get("retail_price") or game.get("retailPrice")
+        or game.get("worth")
     )
-    try:
-        original_amount = float(re.sub(r"[^0-9.]", "", str(original or "")))
-    except ValueError:
-        original_amount = 0.0
+    original_amount = _parse_price_display(original)
     if original_amount <= 0:
-        return False
+        return "missing_positive_original_price"
 
     def flatten(value: Any) -> str:
         if isinstance(value, dict):
@@ -1195,7 +1189,7 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         flatten(game.get(field))
         for field in (
             "type", "offer_type", "offerType", "access_type", "entitlement_type",
-            "subscription", "subscription_name", "source", "availability_type",
+            "subscription", "subscription_name", "availability_type",
             "included_with", "included_in", "is_subscription", "description",
         )
     )
@@ -1204,42 +1198,82 @@ def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
         "ps plus", "subscription", "included with", "included in pass",
         "game catalog", "game catalogue", "permanently free",
     )
+    if any(_normalised_text(term) in searchable for term in excluded_phrases):
+        return "subscription_or_permanent_free_marker"
+    if game.get("is_subscription") is True or game.get("subscription_included") is True:
+        return "subscription_marker"
     has_subscription_marker = any(
         field in game
         for field in ("subscription", "subscription_name", "is_subscription", "subscription_included")
     )
-    # Epic mobile storefront records are normalized from a distinct mobile
-    # endpoint. Do not mistake the descriptive source label for subscription
-    # access; all other subscription markers and phrases remain excluded.
-    is_epic_mobile_source = _normalised_text(game.get("source")) == "epic mobile storefront"
-    if any(
-        _normalised_text(term) in searchable
-        for term in excluded_phrases
-        if not (is_epic_mobile_source and _normalised_text(term) == "subscription")
-    ):
-        return False
-    if game.get("is_subscription") is True or game.get("subscription_included") is True:
-        return False
     if has_subscription_marker and any(
         game.get(field) not in (None, "", False, 0)
         for field in ("subscription", "subscription_name")
     ):
-        return False
+        return "subscription_metadata"
 
-    # A record explicitly marked as a permanently/free-to-play title is not a
-    # giveaway, even if the source happens to expose an unrelated end date.
     classification = " ".join(
         flatten(game.get(field))
         for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type", "description")
     )
     permanent_free_markers = ("free to play", "free to start", "free2play", "f2p", "permanently free")
     if any(_normalised_text(term) in classification for term in permanent_free_markers):
-        return False
+        return "free_to_play_marker"
 
     offer_type = _normalised_text(game.get("type") or game.get("offer_type") or game.get("offerType"))
     if any(term in offer_type for term in ("dlc", "loot", "beta", "in game")):
-        return False
-    return True
+        return "non_standalone_game_offer"
+    return "eligible"
+
+
+def is_eligible_temporary_offer(game: dict[str, Any], now=None) -> bool:
+    """Accept only active, time-limited, normally paid full games."""
+    return eligibility_rejection_reason(game, now=now) == "eligible"
+
+
+def _targeted_metadata_enrichment(
+    session: requests.Session,
+    api_key: str | None,
+    games: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Fill descriptive fields for eligible-looking records with missing metadata."""
+    enriched = list(games)
+    targets = [
+        game for game in enriched
+        if str(game.get("title") or "").strip()
+        and (
+            not game.get("description")
+            or not game.get("image_url")
+            or not game.get("game_url")
+        )
+    ]
+    if not targets:
+        return enriched
+
+    # Limit lookup volume to candidates that might be posted, but don't allow
+    # catalogue data to manufacture missing offer dates or free/paid state.
+    for game in targets:
+        title = str(game.get("title") or "").strip()
+        platform = str(game.get("platform") or "").strip() or None
+        try:
+            records = fetch_game_search(session, api_key, title, platform)
+        except Exception:
+            log.exception("Metadata lookup failed for %s; leaving source row unchanged", title)
+            continue
+
+        match = next((record for record in records if _same_game_listing(game, record)), None)
+        if not match:
+            log.info("Metadata lookup for %s returned %s results but no exact title/platform match", title, len(records))
+            continue
+        before = dict(game)
+        game.update(merge_game_metadata(game, match))
+        filled = [
+            field for field in ("description", "image_url", "game_url")
+            if before.get(field) in (None, "") and game.get(field) not in (None, "")
+        ]
+        log.info("Metadata lookup enriched %s fields for %s: %s", len(filled), title, ", ".join(filled) or "none")
+
+    return enriched
 
 
 async def run_notifier() -> None:
