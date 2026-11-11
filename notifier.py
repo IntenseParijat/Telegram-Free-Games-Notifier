@@ -337,7 +337,7 @@ def fetch_game_search(
     """Use the documented /games?search= filter for targeted metadata recovery."""
     label = f"search={search!r}" + (f", platform={platform}" if platform else "")
     payload = fetch_page(
-        session, 1, api_key, platform, limit=min(_api_limit_for_key(api_key), 100),
+        session, 1, api_key, platform, limit=_api_limit_for_key(api_key),
         endpoint=GAMES_API_URL, search=search,
     )
     records, _ = _api_response_data(payload, label)
