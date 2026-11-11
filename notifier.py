@@ -215,8 +215,8 @@ def _fetch_platform_games(
                         pass
                     break
             for total_key in (
-                "total", "totalItems", "total_items", "count", "total_records",
-                "totalResults", "total_results",
+                "total", "totalItems", "total_items", "total_records",
+                "totalResults", "total_results", "totalCount", "total_count",
             ):
                 if meta.get(total_key) is not None:
                     try:
