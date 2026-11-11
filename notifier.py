@@ -255,12 +255,34 @@ def fetch_game_search(
 
 
 def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
-    """Fill absent/empty fields from a matching /games lookup without overwriting offer state."""
+    """Fill descriptive metadata; never import offer-state fields from catalogue rows."""
     merged = dict(primary)
+    forbidden = {
+        "is_free", "start_date", "startDate", "end_date", "endDate",
+        "offer_end_date", "offerEndDate", "free_until", "freeUntil",
+        "offer_expires_at", "expires_at", "ends_at", "discount_percent",
+        "final_price", "discount_price",
+    }
     for key, value in secondary.items():
+        if key in forbidden:
+            continue
         if merged.get(key) in (None, "", [], {}):
             merged[key] = value
     return merged
+
+
+def _same_game_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Conservative normalized title + platform match for catalogue enrichment."""
+    left_title = _normalised_text(left.get("title"))
+    right_title = _normalised_text(right.get("title"))
+    if not left_title or left_title != right_title:
+        return False
+    left_platform = _normalised_text(left.get("platform"))
+    right_platform = _normalised_text(right.get("platform"))
+    if left_platform and right_platform and left_platform != right_platform:
+        return False
+    return True
+
 
 GAMERPOWER_API_URL = "https://www.gamerpower.com/api/giveaways"
 
