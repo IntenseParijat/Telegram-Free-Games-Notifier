@@ -230,6 +230,35 @@ def _fetch_platform_games(
             log.info("%s page %s returned 0 records; pagination ended", label, page)
             break
 
+        if page == 1:
+            sample = records[0]
+            log.info(
+                "%s first-page schema: %s",
+                label, ", ".join(sorted(str(key) for key in sample.keys())),
+            )
+            log.info(
+                "%s first-page example: title=%r, is_free=%r, expiry_fields=%s, price_fields=%s",
+                label,
+                sample.get("title"),
+                sample.get("is_free"),
+                {
+                    key: sample.get(key)
+                    for key in (
+                        "end_date", "endDate", "offer_end_date", "offerEndDate",
+                        "free_until", "expires_at", "expiration_date",
+                    )
+                    if sample.get(key) not in (None, "")
+                },
+                {
+                    key: sample.get(key)
+                    for key in (
+                        "original_price", "originalPrice", "regular_price",
+                        "retail_price", "worth", "price",
+                    )
+                    if sample.get(key) not in (None, "", 0)
+                },
+            )
+
         ids = tuple(_record_identity(x) for x in records)
         if ids in page_fingerprints:
             log.error(
@@ -260,6 +289,13 @@ def _fetch_platform_games(
             limit,
             expected_total if expected_total is not None else "?",
         )
+
+        if added == 0:
+            log.error(
+                "%s page %s returned %s rows but none were new; stopping incomplete instead of looping",
+                label, page, len(records),
+            )
+            break
 
         if expected_total_pages is not None and page >= expected_total_pages:
             scan_complete = True
