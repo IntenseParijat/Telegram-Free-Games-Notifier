@@ -275,17 +275,26 @@ def _mobile_price_amount(value: Any) -> float:
     return amount / 100 if amount > 100 else amount
 
 
+def _parse_price_display(value: Any) -> float:
+    """Parse display values such as '$7.99', '€7,99', or '7.99 USD'."""
+    if value is None:
+        return 0.0
+    raw = str(value).strip()
+    match = re.search(r"([0-9]+(?:[.,][0-9]{1,2})?)", raw)
+    if not match:
+        return 0.0
+    numeric = match.group(1).replace(",", ".")
+    try:
+        return float(numeric)
+    except ValueError:
+        return 0.0
+
+
 def fetch_epic_mobile_platform(
     session: requests.Session,
     platform: str,
 ) -> list[dict[str, Any]]:
-    """Fetch mobile products and normalize active free-to-keep promotions.
-
-    The mobile storefront endpoint is separate from Epic's regular PC free-games
-    promotions feed. It returns products with platform-specific pricing and
-    action data. Only products with an explicit active free claim action and
-    a positive normal price are converted into notifier records.
-    """
+    """Fetch current Epic mobile freeGame module (Android or iOS)."""
     params = {
         "count": 10,
         "country": os.getenv("EPIC_COUNTRY", "IN"),
@@ -293,7 +302,6 @@ def fetch_epic_mobile_platform(
         "platform": platform,
         "start": 0,
         "store": "EGS",
-        # Epic's CDN caches this endpoint by the complete query string.
         "cb": int(time.time() * 1000),
     }
     headers = {
@@ -301,23 +309,18 @@ def fetch_epic_mobile_platform(
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "User-Agent": "EpicGamesStore/1.0 (Android)",
+        "User-Agent": "UEGameRequest/1.0 epicgames",
     }
 
     payload: dict[str, Any] | None = None
     last_error: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = session.get(
-                MOBILE_EPIC_API_URL,
-                params=params,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-            )
+            response = session.get(MOBILE_EPIC_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             candidate = response.json()
             if not isinstance(candidate, dict) or not isinstance(candidate.get("data"), list):
-                raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response schema")
+                raise RuntimeError(f"Epic {platform} mobile response has no data array")
             payload = candidate
             break
         except (requests.RequestException, ValueError, RuntimeError) as exc:
@@ -325,126 +328,116 @@ def fetch_epic_mobile_platform(
             if attempt == MAX_RETRIES:
                 break
             wait = min(2 ** attempt, 30)
-            log.warning(
-                "Epic %s mobile request failed (attempt %s/%s): %s; retrying in %ss",
-                platform, attempt, MAX_RETRIES, exc, wait,
-            )
+            log.warning("Epic %s mobile request failed (%s); retrying in %ss", platform, exc, wait)
             time.sleep(wait)
 
     if payload is None:
         raise RuntimeError(f"Could not fetch Epic {platform} mobile offers after {MAX_RETRIES} attempts: {last_error}")
 
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected response")
-    sections = payload.get("data") or []
-    if not isinstance(sections, list):
-        raise RuntimeError(f"Epic {platform} mobile endpoint returned an unexpected sections list")
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    sections = payload["data"]
+    log.info(
+        "Epic %s mobile API response: %s sections (%s bytes decoded)",
+        platform, len(sections), len(response.content),
+    )
 
     normalized: list[dict[str, Any]] = []
-    for section in sections:
-        if not isinstance(section, dict) or section.get("type") != "freeGame":
-            continue
+    free_sections = [section for section in sections if isinstance(section, dict) and section.get("type") == "freeGame"]
+    log.info("Epic %s mobile: found %s freeGame sections", platform, len(free_sections))
 
-        offers = section.get("offers") or []
-        for offer in offers:
+    for section in free_sections:
+        for offer in section.get("offers") or []:
             if not isinstance(offer, dict):
                 continue
             content = offer.get("content") or {}
             if not isinstance(content, dict):
                 continue
 
-            slug = (content.get("mapping") or {}).get("slug")
+            slug = ((content.get("mapping") or {}).get("slug") or "").strip()
+            title = str(content.get("title") or "Unknown")
             if not slug:
+                log.info("Epic %s mobile skipped %s: missing product slug", platform, title)
                 continue
 
-            # A mobile product can contain multiple Claim states: an active
-            # one and a future scheduled one. Select only a currently active
-            # zero-price Claim and use its effective date as the offer start.
             purchases = content.get("purchase") or []
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
+            if not isinstance(purchases, list):
+                log.info("Epic %s mobile skipped %s: purchase field is not a list", platform, title)
+                continue
 
-            def purchase_time(value: Any):
-                return _parse_offer_datetime(value)
-
-            current_claims: list[tuple[int, dict[str, Any]]] = []
+            candidates: list[tuple[int, dict[str, Any]]] = []
             for index, purchase in enumerate(purchases):
-                if not isinstance(purchase, dict):
+                if not isinstance(purchase, dict) or purchase.get("purchaseType") != "Claim":
                     continue
-                purchase_price = purchase.get("price") or {}
+                price_data = purchase.get("price") or {}
                 try:
-                    decimal_price = float(purchase_price.get("decimalPrice"))
+                    claim_price = float(price_data.get("decimalPrice"))
                 except (TypeError, ValueError):
                     continue
-                effective_at = purchase_time(purchase.get("purchaseStateEffectiveDate"))
-                if (
-                    purchase.get("purchaseType") == "Claim"
-                    and decimal_price == 0
-                    and effective_at is not None
-                    and effective_at <= now
-                ):
-                    current_claims.append((index, purchase))
-            if not current_claims:
+                effective_at = _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate"))
+                if claim_price == 0 and effective_at is not None and effective_at <= now:
+                    candidates.append((index, purchase))
+
+            if not candidates:
+                upcoming = sum(
+                    1 for purchase in purchases
+                    if isinstance(purchase, dict)
+                    and purchase.get("purchaseType") == "Claim"
+                    and _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate")) is not None
+                    and _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate")) > now
+                )
+                log.info(
+                    "Epic %s mobile skipped %s: no currently active zero-price Claim (purchase_entries=%s, future_claims=%s)",
+                    platform, title, len(purchases), upcoming,
+                )
                 continue
 
-            claim_index, claim_entry = current_claims[-1]
-            claim_discount = claim_entry.get("discount") or {}
-            end_value = claim_discount.get("discountEndDate")
+            claim_index, claim = candidates[-1]
+            discount = claim.get("discount") or {}
+            start_value = claim.get("purchaseStateEffectiveDate")
+            end_value = discount.get("discountEndDate")
             if not end_value:
-                for next_purchase in purchases[claim_index + 1:]:
-                    if not isinstance(next_purchase, dict):
-                        continue
-                    next_effective = next_purchase.get("purchaseStateEffectiveDate")
-                    next_at = purchase_time(next_effective)
-                    if next_at is not None and next_at > now:
-                        end_value = next_effective
-                        break
-            if not end_value:
-                log.info("Epic %s mobile: %s has no claim end time; skipping", platform, content.get("title"))
+                next_state = [
+                    _parse_offer_datetime(p.get("purchaseStateEffectiveDate"))
+                    for p in purchases[claim_index + 1:]
+                    if isinstance(p, dict)
+                ]
+                next_dates = [d for d in next_state if d is not None and d > now]
+                if next_dates:
+                    end_value = min(next_dates).isoformat().replace("+00:00", "Z")
+            end_at = _parse_offer_datetime(end_value)
+            if end_at is None or end_at <= now:
+                log.info("Epic %s mobile skipped %s: missing or expired Claim end time", platform, title)
                 continue
 
-            original_price = 0.0
-            original_display = claim_discount.get("originalPriceDisplay")
-            if original_display:
-                try:
-                    original_price = float(re.sub(r"[^0-9.]", "", str(original_display)))
-                except ValueError:
-                    original_price = 0.0
+            # Epic returns the normal retail value in the active Claim's
+            # discount.originalPriceDisplay. This is the canonical field;
+            # do not infer a retail price from another future/expired state.
+            original_display = discount.get("originalPriceDisplay")
+            original_price = _parse_price_display(original_display)
             if original_price <= 0:
-                for purchase in purchases:
-                    if not isinstance(purchase, dict) or purchase is claim_entry:
-                        continue
-                    purchase_price = purchase.get("price") or {}
-                    try:
-                        candidate = float(purchase_price.get("decimalPrice"))
-                    except (TypeError, ValueError):
-                        continue
-                    if candidate > 0:
-                        original_price = candidate
-                        break
+                # Some Epic responses place the normal price on priceDisplay.
+                original_price = _parse_price_display(claim.get("priceDisplay"))
             if original_price <= 0:
-                log.info("Epic %s mobile: %s has no positive regular price; skipping", platform, content.get("title"))
+                log.info(
+                    "Epic %s mobile skipped %s: no positive normal price in active Claim (originalPriceDisplay=%r, priceDisplay=%r)",
+                    platform, title, original_display, claim.get("priceDisplay"),
+                )
                 continue
 
-            start_value = claim_entry.get("purchaseStateEffectiveDate")
             media = content.get("media") or {}
             if not isinstance(media, dict):
                 media = {}
-            media_item = media.get("card16x9") or media.get("coverImage") or {}
-            image_url = media_item.get("imageSrc") if isinstance(media_item, dict) else None
-
-            title = content.get("title") or "Unknown"
-            page_url = f"https://store.epicgames.com/en-US/p/{slug}"
-            description = content.get("description") or content.get("shortDescription") or ""
+            image_data = media.get("card16x9") or media.get("coverImage") or {}
+            image_url = image_data.get("imageSrc") if isinstance(image_data, dict) else None
             identifier = (
                 content.get("catalogItemId") or offer.get("offerId")
-                or content.get("id") or content.get("productId")
-                or content.get("namespace") or slug
+                or content.get("id") or content.get("productId") or slug
             )
 
             normalized.append({
-                "title": str(title),
-                "description": str(description),
+                "title": title,
+                "description": str(content.get("description") or content.get("shortDescription") or ""),
                 "platform": f"Epic ({platform.title()})",
                 "game_id": str(identifier),
                 "id": str(identifier),
@@ -454,17 +447,18 @@ def fetch_epic_mobile_platform(
                 "discount_price": 0,
                 "start_date": start_value,
                 "end_date": end_value,
-                "game_url": page_url,
+                "game_url": f"https://store.epicgames.com/en-US/p/{slug}",
                 "image_url": valid_http_url(image_url),
                 "type": "BASE_GAME",
                 "offer_type": "BASE_GAME",
                 "source": "Epic mobile storefront",
             })
+            log.info(
+                "Epic %s mobile qualified %s: original=%s, starts=%s, ends=%s",
+                platform, title, original_price, start_value, end_value,
+            )
 
-    log.info(
-        "Epic %s mobile storefront returned %s sections; %s active free offers qualified",
-        platform, len(sections), len(normalized),
-    )
+    log.info("Epic %s mobile: %s currently active paid-game offer(s) qualified", platform, len(normalized))
     return normalized
 
 def fetch_epic_mobile_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
