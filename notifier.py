@@ -1431,8 +1431,21 @@ def _targeted_metadata_enrichment(
     searched: set[tuple[str, str]] = set()
     for game in targets[:max_lookups]:
         title = str(game.get("title") or "").strip()
-        platform = str(game.get("platform") or "").strip() or None
-        lookup_key = (_canonical_game_title(title), _platform_family(platform))
+        display_platform = str(game.get("platform") or "").strip()
+        family = _platform_family(display_platform)
+        api_platforms = {
+            "epic": "Epic",
+            "steam": "Steam",
+            "playstation": "PlayStation",
+            "xbox": "Xbox",
+        }
+        platform = api_platforms.get(family)
+        if platform is None:
+            # The FGR catalogue is a PC/console catalogue; don't issue
+            # unsupported Android/iOS searches for mobile-only listings.
+            continue
+
+        lookup_key = (_canonical_game_title(title), family)
         if lookup_key in searched:
             continue
         searched.add(lookup_key)
