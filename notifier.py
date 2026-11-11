@@ -833,25 +833,40 @@ def _offer_start_value(game: dict[str, Any]) -> Any:
 
 
 def game_key(game: dict[str, Any]) -> str:
-    """Identify a promotion by platform, game and offer start time.
+    """Identify one giveaway campaign while keeping platform stores separate.
 
-    Records without a parseable offer-start timestamp fall back to the
-    platform-plus-game key, preserving duplicate protection for incomplete API
-    records.
+    For mobile giveaways discovered by more than one source, use normalized
+    title + offer start time so Epic's Android/iOS feed and GamerPower do not
+    send the same campaign twice. Non-mobile store listings retain their exact
+    platform + API-ID key, preserving the existing Flotsam state key.
     """
     platform = str(game.get("platform") or "Unknown").strip().casefold()
-    identifier = str(game.get("game_id") or game.get("id") or "").strip()
-    if not identifier:
-        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
+    source = _normalised_text(game.get("source"))
+    is_mobile_discovery = (
+        "mobile" in source
+        or "android" in platform
+        or "ios" in platform
+        or "mobile" in platform
+    )
+
+    if is_mobile_discovery:
+        identifier = _normalised_text(game.get("title"))
+    else:
+        identifier = str(game.get("game_id") or game.get("id") or "").strip()
+        if not identifier:
+            identifier = _normalised_text(game.get("title"))
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
 
-    start_value = _offer_start_value(game)
-    start_at = _parse_offer_datetime(start_value)
+    start_at = _parse_offer_datetime(_offer_start_value(game))
     if start_at is not None:
         offer_start = start_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+        if is_mobile_discovery:
+            return f"mobile:{identifier}:offer:{offer_start}"
         return f"{platform}:{identifier}:offer:{offer_start}"
 
+    if is_mobile_discovery:
+        return f"mobile:{identifier}"
     return f"{platform}:{identifier}"
 
 
