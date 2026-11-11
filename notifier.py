@@ -982,7 +982,21 @@ def load_state() -> set[str]:
         keys = data.get("seen", []) if isinstance(data, dict) else []
         if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
             raise ValueError("State file must contain a 'seen' array of strings")
-        return set(keys)
+
+        seen = set(keys)
+        historical_mobile_keys = (
+            "mobile:chants of sennaar mobile giveaway:until:2026-11-12",
+            "mobile:chants of sennaar mobile:until:2026-11-12",
+            "mobile:chants of sennaar:until:2026-11-12",
+        )
+        if any(key in seen for key in historical_mobile_keys):
+            canonical_key = "mobile:chants of sennaar:until:2026-11-12"
+            if canonical_key not in seen:
+                seen.add(canonical_key)
+                log.info(
+                    "Migrated historical Chants of Sennaar mobile giveaway markers to the canonical campaign key"
+                )
+        return seen
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise RuntimeError(f"Cannot read duplicate state at {STATE_PATH}: {exc}") from exc
 
