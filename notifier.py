@@ -641,6 +641,21 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             len(mobile_games), mobile_added,
         )
 
+        # Independent giveaway aggregator fallback for mobile full games only.
+        gamerpower_games = fetch_gamerpower_mobile_games(session)
+        gamerpower_added = 0
+        for game in gamerpower_games:
+            key = game_key(game)
+            if key in seen_global:
+                continue
+            seen_global.add(key)
+            all_games.append(game)
+            gamerpower_added += 1
+        log.info(
+            "Merged GamerPower mobile feed: %s qualified records, %s unique records added",
+            len(gamerpower_games), gamerpower_added,
+        )
+
     log.info(
         "Combined catalogue: %s unique API records; aggregate scan_complete=%s",
         len(all_games), all_complete,
