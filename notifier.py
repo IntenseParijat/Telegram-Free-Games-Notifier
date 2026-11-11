@@ -495,7 +495,7 @@ def fetch_gamerpower_mobile_games(
                 continue
 
             end_value = item.get("end_date")
-            end_at = _parse_offer_datetime(end_value)
+            end_at = _parse_offer_datetime(end_value, date_only_end=True)
             from datetime import datetime, timezone
             if end_at is None or end_at <= datetime.now(timezone.utc):
                 log.info(
@@ -733,7 +733,7 @@ def fetch_epic_mobile_platform(
                 next_dates = [d for d in next_state if d is not None and d > now]
                 if next_dates:
                     end_value = min(next_dates).isoformat().replace("+00:00", "Z")
-            end_at = _parse_offer_datetime(end_value)
+            end_at = _parse_offer_datetime(end_value, date_only_end=True)
             if end_at is None or end_at <= now:
                 log.info("Epic %s mobile skipped %s: missing or expired Claim end time", platform, title)
                 continue
@@ -1223,32 +1223,45 @@ def _normalised_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
 
 
-def _parse_offer_datetime(value: Any):
+def _parse_offer_datetime(value: Any, date_only_end: bool = False):
     from datetime import datetime, timezone
 
     if value is None:
         return None
     if isinstance(value, (int, float)):
         try:
-            parsed = datetime.fromtimestamp(value, tz=timezone.utc)
-            return parsed
+            # Some APIs return Unix milliseconds instead of seconds.
+            timestamp = value / 1000 if value > 10_000_000_000 else value
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             return None
 
     raw = str(value).strip()
     if not raw:
         return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y"):
-            try:
-                parsed = datetime.strptime(raw, fmt)
-                break
-            except ValueError:
-                continue
-        else:
+
+    # A date-only end date represents the full calendar day, not midnight at
+    # its beginning. Start dates keep the normal midnight interpretation.
+    if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", raw):
+        try:
+            parsed = datetime.strptime(raw, "%Y-%m-%d")
+            if date_only_end:
+                parsed = parsed.replace(hour=23, minute=59, second=59)
+        except ValueError:
             return None
+    else:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%d-%m-%Y"):
+                try:
+                    parsed = datetime.strptime(raw, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return None
+
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
@@ -1276,7 +1289,7 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
         or game.get("offer_expires_at") or game.get("expires_at")
         or game.get("ends_at")
     )
-    end_at = _parse_offer_datetime(end_value)
+    end_at = _parse_offer_datetime(end_value, date_only_end=True)
     from datetime import datetime, timezone
     now_at = now or datetime.now(timezone.utc)
     if now_at.tzinfo is None:
