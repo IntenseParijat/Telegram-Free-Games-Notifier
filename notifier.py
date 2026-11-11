@@ -342,21 +342,38 @@ def _same_game_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
 GAMERPOWER_API_URL = "https://www.gamerpower.com/api/giveaways"
 
 
-def fetch_gamerpower_mobile_games(session: requests.Session) -> list[dict[str, Any]]:
-    """Independent discovery for active Android/iOS full-game giveaways."""
+def fetch_gamerpower_mobile_games(
+    session: requests.Session,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch active Android/iOS full-game giveaways and report feed health."""
     discovered: list[dict[str, Any]] = []
-    for platform in ("android", "ios"):
-        params = {"platform": platform, "type": "game", "sort-by": "date"}
+    all_complete = True
+    by_giveaway: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for requested_platform in ("android", "ios"):
+        params = {
+            "platform": requested_platform,
+            "type": "game",
+            "sort-by": "date",
+        }
         response = None
+        empty_result = False
+
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = session.get(
                     GAMERPOWER_API_URL,
                     params=params,
-                    headers={"Accept": "application/json", "User-Agent": "Telegram-Free-Games-Notifier/1.0"},
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "Telegram-Free-Games-Notifier/1.0",
+                        "Cache-Control": "no-cache",
+                    },
                     timeout=REQUEST_TIMEOUT,
                 )
-                if response.status_code in (201, 404):
+                if response.status_code == 201:
+                    # GamerPower explicitly uses 201 when no active giveaways match.
+                    empty_result = True
                     response = None
                     break
                 if response.status_code == 429 or response.status_code >= 500:
@@ -367,93 +384,150 @@ def fetch_gamerpower_mobile_games(session: requests.Session) -> list[dict[str, A
                         wait = min(2 ** attempt, 30)
                     if attempt == MAX_RETRIES:
                         response.raise_for_status()
-                    log.warning("GamerPower %s HTTP %s; retrying in %ss", platform, response.status_code, wait)
+                    log.warning(
+                        "GamerPower %s returned HTTP %s; retrying in %ss",
+                        requested_platform, response.status_code, wait,
+                    )
                     time.sleep(wait)
                     continue
                 response.raise_for_status()
                 break
             except requests.RequestException as exc:
                 if attempt == MAX_RETRIES:
-                    log.exception("GamerPower %s request failed after %s attempts", platform, MAX_RETRIES)
                     response = None
+                    all_complete = False
+                    log.exception(
+                        "GamerPower %s request failed after %s attempts",
+                        requested_platform, MAX_RETRIES,
+                    )
                     break
                 wait = min(2 ** attempt, 30)
-                log.warning("GamerPower %s request failed (%s); retrying in %ss", platform, exc, wait)
+                log.warning(
+                    "GamerPower %s request failed (%s); retrying in %ss",
+                    requested_platform, exc, wait,
+                )
                 time.sleep(wait)
 
+        if empty_result:
+            log.info("GamerPower %s: no active full-game giveaways (HTTP 201)", requested_platform)
+            continue
         if response is None:
-            log.warning("GamerPower %s feed unavailable or empty", platform)
+            all_complete = False
+            log.warning("GamerPower %s feed unavailable; mobile source coverage is partial", requested_platform)
             continue
 
         try:
             payload = response.json()
         except ValueError:
-            log.warning("GamerPower %s returned invalid JSON", platform)
+            all_complete = False
+            log.exception("GamerPower %s returned invalid JSON", requested_platform)
             continue
         if not isinstance(payload, list):
-            log.warning("GamerPower %s returned unexpected payload type %s", platform, type(payload).__name__)
+            all_complete = False
+            log.error(
+                "GamerPower %s returned unexpected payload type %s",
+                requested_platform, type(payload).__name__,
+            )
             continue
 
         matched = 0
         for item in payload:
             if not isinstance(item, dict) or _normalised_text(item.get("type")) != "game":
                 continue
+
             title = str(item.get("title") or "").strip()
             if not title:
                 continue
 
             platform_labels = _normalised_text(item.get("platforms"))
-            if platform not in platform_labels.split() and platform not in platform_labels:
+            available_platforms = [
+                label for label in ("android", "ios")
+                if label in platform_labels.split()
+            ]
+            if requested_platform not in available_platforms:
                 continue
 
             end_value = item.get("end_date")
             end_at = _parse_offer_datetime(end_value)
             from datetime import datetime, timezone
             if end_at is None or end_at <= datetime.now(timezone.utc):
-                log.info("GamerPower skipped %s (%s): missing or expired end_date=%r", title, platform, end_value)
+                log.info(
+                    "GamerPower skipped %s: missing or expired end_date=%r",
+                    title, end_value,
+                )
                 continue
 
             worth = item.get("worth")
             normal_price = _parse_price_display(worth)
             if normal_price <= 0:
-                log.info("GamerPower skipped %s (%s): no positive worth=%r", title, platform, worth)
+                log.info("GamerPower skipped %s: no positive worth=%r", title, worth)
                 continue
 
             claim_url = valid_http_url(
-                item.get("open_giveaway_url") or item.get("open_giveaway") or item.get("gamerpower_url")
+                item.get("open_giveaway_url")
+                or item.get("open_giveaway")
+                or item.get("gamerpower_url")
             )
             if not claim_url:
-                log.info("GamerPower skipped %s (%s): no valid claim URL", title, platform)
+                log.info("GamerPower skipped %s: no valid claim URL", title)
                 continue
 
             giveaway_id = str(item.get("id") or _normalised_text(title))
-            image_url = valid_http_url(item.get("image") or item.get("thumbnail"))
-            discovered.append({
+            published = str(item.get("published_date") or "").strip()
+            stable_time = published or end_at.isoformat()
+            stable_id = (giveaway_id, stable_time)
+
+            platform_label = ", ".join(label.title() for label in available_platforms)
+            details = " ".join((
+                title,
+                str(item.get("description") or ""),
+                str(item.get("instructions") or ""),
+                str(item.get("gamerpower_url") or ""),
+            ))
+            if "epic" in _normalised_text(details):
+                display_platform = f"Epic ({platform_label})"
+            else:
+                display_platform = platform_label
+
+            existing = by_giveaway.get(stable_id)
+            if existing:
+                # The same GamerPower record can be returned for both Android
+                # and iOS filters. Preserve the union instead of posting it twice.
+                labels = [x.strip() for x in str(existing.get("platform") or "").split(",")]
+                labels.extend(x.strip() for x in display_platform.split(","))
+                existing["platform"] = ", ".join(dict.fromkeys(x for x in labels if x))
+                continue
+
+            game = {
                 "title": title,
                 "description": str(item.get("description") or ""),
-                "platform": f"Epic Mobile ({platform.title()})" if "epic" in platform_labels else platform.title(),
+                "platform": display_platform,
                 "game_id": giveaway_id,
                 "id": giveaway_id,
                 "is_free": True,
                 "original_price": normal_price,
+                "worth": worth,
                 "final_price": 0,
                 "discount_price": 0,
-                "start_date": item.get("published_date"),
+                "start_date": published or None,
                 "end_date": end_value,
                 "game_url": claim_url,
-                "image_url": image_url,
+                "image_url": valid_http_url(item.get("image") or item.get("thumbnail")),
                 "type": "BASE_GAME",
                 "offer_type": "BASE_GAME",
                 "source": "GamerPower mobile full-game giveaway",
-            })
+                "source_url": "https://www.gamerpower.com/",
+            }
+            by_giveaway[stable_id] = game
             matched += 1
 
         log.info(
-            "GamerPower %s returned %s records; %s active full-game giveaways qualified",
-            platform, len(payload), matched,
+            "GamerPower %s: HTTP %s, %s records received, %s active full-game giveaways qualified",
+            requested_platform, response.status_code, len(payload), matched,
         )
 
-    return discovered
+    discovered.extend(by_giveaway.values())
+    return discovered, all_complete
 
 
 MOBILE_EPIC_API_URL = "https://egs-platform-service.store.epicgames.com/api/v2/public/discover/home"
