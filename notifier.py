@@ -347,8 +347,25 @@ def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> d
 
 
 def _canonical_game_title(value: Any) -> str:
+    """Normalize mobile giveaway source suffixes to the base game title."""
     title = _normalised_text(value)
-    return re.sub(r"\s+(?:mobile|android|ios)$", "", title).strip()
+    suffix_patterns = (
+        r"\\s+mobile\\s+giveaway$",
+        r"\\s+giveaway$",
+        r"\\s+mobile$",
+        r"\\s+android$",
+        r"\\s+ios$",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for pattern in suffix_patterns:
+            normalized = re.sub(pattern, "", title).strip()
+            if normalized != title:
+                title = normalized
+                changed = True
+    return title
+
 
 
 def _platform_family(value: Any) -> str:
@@ -904,23 +921,21 @@ def _offer_start_value(game: dict[str, Any]) -> Any:
 
 
 def game_key(game: dict[str, Any]) -> str:
-    """Identify a giveaway campaign, independent of its mobile discovery source."""
+    """Identify mobile campaigns across sources; preserve store-specific keys elsewhere."""
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     source = _normalised_text(game.get("source"))
-    is_mobile_discovery = (
+    normalized_platform = _normalised_text(platform)
+    is_mobile = (
         "mobile" in source
-        or "android" in platform
-        or "ios" in platform
-        or "mobile" in platform
+        or "android" in normalized_platform.split()
+        or "ios" in normalized_platform.split()
+        or "mobile" in normalized_platform.split()
+        or "android" in _normalised_text(game.get("title")).split()
+        or "ios" in _normalised_text(game.get("title")).split()
     )
 
-    if is_mobile_discovery:
-        identifier = _normalised_text(game.get("title"))
-        identifier = re.sub(r"\s+(?:android\\s+ios|ios\\s+android)$", "", identifier)
-        identifier = re.sub(r"\s+(?:mobile|android|ios|giveaway)$", "", identifier)
-        # Track one mobile campaign across Epic and GamerPower. Prefer its
-        # ending calendar date because the two sources can express its start
-        # time differently; a later free period has a different end date.
+    if is_mobile:
+        identifier = _canonical_game_title(game.get("title"))
         end_value = (
             game.get("end_date") or game.get("endDate")
             or game.get("offer_end_date") or game.get("offerEndDate")
@@ -937,15 +952,13 @@ def game_key(game: dict[str, Any]) -> str:
 
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
-
     start_at = _parse_offer_datetime(_offer_start_value(game))
     if start_at is not None:
         offer_start = start_at.isoformat(timespec="seconds").replace("+00:00", "Z")
         return f"{platform}:{identifier}:offer:{offer_start}"
-
     return f"{platform}:{identifier}"
 
 def legacy_game_key(game: dict[str, Any]) -> str:
