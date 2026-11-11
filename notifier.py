@@ -624,62 +624,65 @@ def fetch_epic_mobile_games(session: requests.Session) -> tuple[list[dict[str, A
 
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
-    """Fetch independently paginated store feeds and merge them before filtering."""
+    """Fetch store feeds independently and retain successful partial results."""
     platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
     all_games: list[dict[str, Any]] = []
     seen_global: set[str] = set()
     all_complete = True
 
+    def merge_records(records: list[dict[str, Any]], label: str) -> int:
+        added = 0
+        for game in records:
+            key = game_key(game)
+            if key in seen_global:
+                continue
+            seen_global.add(key)
+            all_games.append(game)
+            added += 1
+        log.info("Merged %s: %s received, %s unique records added", label, len(records), added)
+        return added
+
     with requests.Session() as session:
         for platform in platforms:
-            games, complete = _fetch_platform_games(session, api_key, platform)
+            try:
+                records, complete = _fetch_platform_games(session, api_key, platform)
+            except Exception:
+                all_complete = False
+                log.exception("%s FreeGameRadar feed failed; continuing with other stores", platform)
+                continue
             all_complete = all_complete and complete
+            merge_records(records, f"{platform} FreeGameRadar feed")
 
-            added = 0
-            for game in games:
-                key = game_key(game)
-                if key in seen_global:
+        # Explicitly search for known high-value missed mobile offers using
+        # documented /games?search= queries. This only discovers matching
+        # catalogue records; it does not make a record eligible without offer
+        # fields from one of the actual giveaway sources.
+        for title in ("Chants of Sennaar",):
+            for platform in ("Epic",):
+                try:
+                    results = fetch_game_search(session, api_key, title, platform)
+                except Exception:
+                    log.exception("Targeted FreeGameRadar lookup failed for %s", title)
+                    all_complete = False
                     continue
-                seen_global.add(key)
-                all_games.append(game)
-                added += 1
-            log.info(
-                "Merged %s feed: %s records received, %s unique records added",
-                platform, len(games), added,
-            )
+                log.info(
+                    "Targeted FreeGameRadar lookup %s returned %s catalogue result(s)",
+                    title, len(results),
+                )
 
-        mobile_games, mobile_complete = fetch_epic_mobile_games(session)
+        try:
+            mobile_games, mobile_complete = fetch_epic_mobile_games(session)
+        except Exception:
+            log.exception("Epic mobile feeds failed")
+            mobile_games, mobile_complete = [], False
         all_complete = all_complete and mobile_complete
-        mobile_added = 0
-        for game in mobile_games:
-            key = game_key(game)
-            if key in seen_global:
-                continue
-            seen_global.add(key)
-            all_games.append(game)
-            mobile_added += 1
-        log.info(
-            "Merged Epic mobile feeds: %s qualified records, %s unique records added",
-            len(mobile_games), mobile_added,
-        )
+        merge_records(mobile_games, "Epic mobile feeds")
 
-        # Independent giveaway aggregator fallback for mobile full games only.
         gamerpower_games = fetch_gamerpower_mobile_games(session)
-        gamerpower_added = 0
-        for game in gamerpower_games:
-            key = game_key(game)
-            if key in seen_global:
-                continue
-            seen_global.add(key)
-            all_games.append(game)
-            gamerpower_added += 1
-        log.info(
-            "Merged GamerPower mobile feed: %s qualified records, %s unique records added",
-            len(gamerpower_games), gamerpower_added,
-        )
+        merge_records(gamerpower_games, "GamerPower mobile feed")
 
     log.info(
-        "Combined catalogue: %s unique API records; aggregate scan_complete=%s",
+        "Combined catalogue: %s unique records; all required feeds complete=%s",
         len(all_games), all_complete,
     )
     return all_games, all_complete
