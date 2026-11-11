@@ -16,6 +16,8 @@ Checks FreeGameRadar's documented Epic, Steam, PlayStation and Xbox feeds indepe
    | `TELEGRAM_CHANNEL` | Channel username or numeric ID, e.g. `@IntenseGaming` |
    | `FREEGAMERADAR_API_KEY` | Optional FreeGameRadar API key |
 
+Optional GitHub Actions repository variable: `FREEGAMERADAR_API_LIMIT`. Leave it unset for the default tier-based size (100 with a key, 25 without one). Set it to `200` only when the FreeGameRadar key is on the Pro tier.
+
 4. Make the Telegram account used for the session an administrator of the destination channel with permission to post.
 5. Review and edit `config.py`.
 6. Enable GitHub Actions and run **Actions → Free Game Notifier → Run workflow**.
@@ -110,11 +112,13 @@ If images are disabled or the image upload fails, a text message is sent instead
 
 ## Duplicate protection
 
-The notifier stores each giveaway separately using platform, `game_id` (falling back to the API listing `id`), and the offer start timestamp (`start_date` or another supported start-time field) in `data/seen_games.json`. A later promotion of the same game with a different start time is treated as a new offer and will be posted again, even when months or years have passed. The same offer remains suppressed on subsequent runs. If the API omits an offer-start timestamp, the notifier falls back to the previous platform-plus-game key so duplicate protection still works, but it cannot distinguish a later promotion for that record. A record is eligible only when it is currently marked free, has a future offer-expiry field, has a positive original/retail price, and does not indicate permanent F2P or subscription/pass catalogue access. The same game on different platforms is treated as a separate listing. IDs are retained even if a listing temporarily disappears from the API. The state file is committed back to the repository after each workflow run. Existing legacy game-only keys are migrated without immediately reposting the already-recorded game.
+For FreeGameRadar store listings, the notifier stores each giveaway using its platform, stable game/listing ID, and offer start timestamp. A later promotion with a different start timestamp is treated as a new offer. If an offer-start field is missing, it falls back to a platform-plus-ID key.
+
+Mobile giveaways are deduplicated across Epic's mobile feed and GamerPower using the normalized title plus the offer's expiry date. This prevents the same Android/iOS campaign from being posted twice when both sources report it. When both mobile platforms are available, their platform labels are combined in one notification. A later campaign with a different expiry date is a new offer.
+
+The notifier writes a key only after Telegram confirms that the message was sent. The workflow commits changes to `data/seen_games.json` after each run. The previously delivered Flotsam offer remains recorded under its exact November 5 offer key; the original game-only key is retained as historical state.
 
 Do not delete or replace `data/seen_games.json` unless you intentionally want to reset duplicate tracking.
-
-
 
 ## Epic Games Store mobile giveaways
 
@@ -122,13 +126,15 @@ Epic's mobile giveaways are not part of the regular PC free-games promotions fee
 
 Epic mobile records must contain a currently active, zero-price `Claim` purchase entry, a positive original price, and a valid end time. The expiry is read from `discountEndDate` or the next purchase-state transition. Price strings such as `$7.99` are parsed without requiring a separate paid purchase entry. The notifier logs the number of sections, offers, and the exact reason an offer is skipped.
 
-GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios` and `type=game`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The primary FreeGameRadar API remains the source for Epic PC, Steam, PlayStation, and Xbox offers.
+GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios`, `type=game`, and `sort-by=date`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The claim URL intentionally uses GamerPower's `open_giveaway_url` redirect, providing the active hyperlink back to GamerPower required by its API terms. The primary FreeGameRadar API remains the source for Epic PC, Steam, PlayStation, and Xbox offers.
 
 ## API pagination and recovery
 
-FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pages are fetched sequentially and the log records the requested limit, page number, unique records, and any server-reported pagination totals.
+FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pro users can set the GitHub Actions repository variable `FREEGAMERADAR_API_LIMIT=200`; it is not assumed automatically because the API key does not reveal its tier to the notifier.
 
-If the endpoint returns the exact same page again, the notifier reports that the API appears to be ignoring the page parameter or serving a stale cached page. It does not pretend the scan is complete. Other store feeds and the mobile fallbacks are still attempted independently. A partial scan does not initialize a first-run baseline.
+The notifier requests `page=1`, then `page=2`, `page=3`, and so on, using the maximum configured `limit` on every request. It does not use an undocumented offset or cursor. Short pages are not assumed to be terminal; the scan continues until the API returns an empty page or provides authoritative pagination metadata. Requests use no-cache headers and a cache-busting query value because prior runs received the first page again when requesting page 2.
+
+If a later page exactly repeats an earlier page, or returns no new IDs, the notifier reports an incomplete scan rather than claiming completeness or looping forever. It still checks the other store feeds and both mobile sources and can post valid unseen listings found by those sources. A partial scan never initializes a first-run baseline.
 
 The documented `/developer/games` endpoint supports `platform`, `category`, `search`, `letter`, `page`, and `limit`. The notifier uses `search` only to find descriptive metadata for candidate listings. Catalogue lookups cannot overwrite `is_free`, price, start, or expiry fields and cannot make a listing eligible by themselves.
 
