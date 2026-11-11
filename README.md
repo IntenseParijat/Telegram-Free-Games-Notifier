@@ -118,21 +118,23 @@ Do not delete or replace `data/seen_games.json` unless you intentionally want to
 
 ## Epic Games Store mobile giveaways
 
-Epic's mobile giveaways do not appear in the regular PC free-games promotions feed. The notifier therefore checks Epic's separate mobile discovery endpoint for both Android and iOS, in addition to the store-filtered FreeGameRadar feeds.
+Epic's mobile giveaways are not part of the regular PC free-games promotions feed. The notifier checks Epic's separate Android and iOS discovery API and also checks GamerPower's `type=game` giveaways filtered independently for Android and iOS.
 
-A mobile offer is accepted only when Epic reports a currently active zero-price `Claim` purchase state, the normal paid value is positive, and the claim has a valid end time. The end time comes from Epic's `discountEndDate` or the next purchase-state transition. The notifier does not invent an expiry when Epic omits it. Android and iOS offers are tracked separately because they can use different storefront product identifiers.
+Epic mobile records must contain a currently active, zero-price `Claim` purchase entry, a positive original price, and a valid end time. The expiry is read from `discountEndDate` or the next purchase-state transition. Price strings such as `$7.99` are parsed without requiring a separate paid purchase entry. The notifier logs the number of sections, offers, and the exact reason an offer is skipped.
 
-The mobile request uses a cache-busting query parameter to avoid stale CDN results. If either mobile platform cannot be fetched, that limitation is logged and the overall catalogue is marked partial; results from the other feeds are still processed.
+GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios` and `type=game`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The primary FreeGameRadar API remains the source for Epic PC, Steam, PlayStation, and Xbox offers.
 
 ## API pagination and recovery
 
-The notifier queries Epic, Steam, GOG and Other separately using FreeGameRadar's documented platform filter, with pages of up to 100 records for each store. It deduplicates within and across feeds. Each feed is paginated independently until an empty page, a repeated page, or the safety page limit is reached. A repeated page on one feed is reported as partial and does not discard records collected from other feeds.
+FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pages are fetched sequentially and the log records the requested limit, page number, unique records, and any server-reported pagination totals.
 
-A partial scan never initializes a first-run baseline. That prevents the notifier from treating the first page as the complete catalogue and permanently suppressing games it could not see. If the database already exists, successfully posted titles are recorded normally; failed Telegram deliveries remain unseen and eligible for the next run.
+If the endpoint returns the exact same page again, the notifier reports that the API appears to be ignoring the page parameter or serving a stale cached page. It does not pretend the scan is complete. Other store feeds and the mobile fallbacks are still attempted independently. A partial scan does not initialize a first-run baseline.
 
-If an API request fails or returns malformed JSON, the scan stops and duplicate state is left unchanged. The workflow commits successful state updates even when the notifier reports failure, while keeping the Actions job failed so the error remains visible.
+The documented `/developer/games` endpoint supports `platform`, `category`, `search`, `letter`, `page`, and `limit`. The notifier uses `search` only to find descriptive metadata for candidate listings. Catalogue lookups cannot overwrite `is_free`, price, start, or expiry fields and cannot make a listing eligible by themselves.
 
-When `data/seen_games.json` is absent, the notifier treats the next run as a first run. `SEND_EXISTING_ON_FIRST_RUN = True` posts the currently available free listings; `False` seeds the database without posting, but only after a complete scan. The workflow does not create an empty database before the notifier runs.
+A record is posted only when it has an active free flag, a future end date, a positive regular price, and no indication that it is permanent F2P, DLC/loot/beta, or subscription-only access. Each source logs an eligibility breakdown so exclusions are diagnosable. The bot saves a listing key only after Telegram confirms delivery. A partial discovery run can still deliver valid records it did find, while incomplete feeds are retried on the next scheduled run.
+
+If an API request fails or returns malformed JSON, that feed is marked incomplete. Duplicate state is still committed in the workflow after a run, and the Actions job reports notifier failures rather than masking them.
 
 ## Local run
 
