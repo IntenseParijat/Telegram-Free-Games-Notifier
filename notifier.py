@@ -356,7 +356,7 @@ def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> d
 
 def _canonical_game_title(value: Any) -> str:
     title = _normalised_text(value)
-    return re.sub(r"\\s+(?:mobile|android|ios)$", "", title).strip()
+    return re.sub(r"\s+(?:mobile|android|ios)$", "", title).strip()
 
 
 def _platform_family(value: Any) -> str:
@@ -924,8 +924,8 @@ def game_key(game: dict[str, Any]) -> str:
 
     if is_mobile_discovery:
         identifier = _normalised_text(game.get("title"))
-        identifier = re.sub(r"\\s+(?:android\\s+ios|ios\\s+android)$", "", identifier)
-        identifier = re.sub(r"\\s+(?:mobile|android|ios|giveaway)$", "", identifier)
+        identifier = re.sub(r"\s+(?:android\\s+ios|ios\\s+android)$", "", identifier)
+        identifier = re.sub(r"\s+(?:mobile|android|ios|giveaway)$", "", identifier)
         # Track one mobile campaign across Epic and GamerPower. Prefer its
         # ending calendar date because the two sources can express its start
         # time differently; a later free period has a different end date.
@@ -945,7 +945,7 @@ def game_key(game: dict[str, Any]) -> str:
 
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
 
@@ -1271,7 +1271,7 @@ def _parse_offer_datetime(value: Any, date_only_end: bool = False):
 
     # A date-only end date represents the full calendar day, not midnight at
     # its beginning. Start dates keep the normal midnight interpretation.
-    if re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", raw):
+    if re.fullmatch(r"\d{4}-\\d{2}-\\d{2}", raw):
         try:
             parsed = datetime.strptime(raw, "%Y-%m-%d")
             if date_only_end:
