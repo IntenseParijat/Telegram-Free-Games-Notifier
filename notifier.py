@@ -69,10 +69,28 @@ def _api_response_data(payload: Any, context: str) -> tuple[list[dict[str, Any]]
 
 
 def _api_limit_for_key(api_key: str | None) -> int:
-    # FreeGameRadar's documented caps: 25 anonymous, 100 standard key,
-    # 200 Pro. This repository uses an optional standard developer key.
-    # 100 is the largest documented request supported by that tier.
-    return 100 if api_key else 25
+    """Use the largest documented page size for the configured FGR tier.
+
+    Anonymous: 25. Standard key: 100. Pro key: 200. Pro users can set
+    FREEGAMERADAR_API_LIMIT=200; the default remains the Standard tier.
+    """
+    default_limit = 100 if api_key else 25
+    override = os.getenv("FREEGAMERADAR_API_LIMIT", "").strip()
+    if not override:
+        return default_limit
+    try:
+        requested = int(override)
+    except ValueError:
+        log.warning("Ignoring invalid FREEGAMERADAR_API_LIMIT=%r; using %s", override, default_limit)
+        return default_limit
+    allowed = (25, 100, 200)
+    if requested not in allowed:
+        log.warning("Ignoring unsupported FREEGAMERADAR_API_LIMIT=%s; use 25, 100 or 200", requested)
+        return default_limit
+    if not api_key and requested > 25:
+        log.warning("No FreeGameRadar key is configured; limiting page size to the anonymous maximum of 25")
+        return 25
+    return requested
 
 
 def fetch_page(
@@ -84,13 +102,23 @@ def fetch_page(
     endpoint: str = API_URL,
     search: str | None = None,
 ) -> dict[str, Any]:
-    headers = {"Accept": "application/json", "User-Agent": "Telegram-Free-Games-Notifier/1.0"}
+    headers = {
+        "Accept": "application/json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "Telegram-Free-Games-Notifier/1.0",
+    }
     if api_key:
         headers["X-API-Key"] = api_key
 
+    effective_limit = min(max(int(limit or _api_limit_for_key(api_key)), 1), 200)
     params: dict[str, Any] = {
         "page": page,
-        "limit": min(max(int(limit or _api_limit_for_key(api_key)), 1), 200),
+        "limit": effective_limit,
+        # FGR's documented page parameter should select a different result
+        # window. The cache buster prevents a CDN from replaying page 1 for
+        # later page URLs when the cache key is configured incorrectly.
+        "_cb": int(time.time() * 1000),
     }
     if platform:
         params["platform"] = platform
@@ -101,6 +129,11 @@ def fetch_page(
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = session.get(endpoint, headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+            if attempt == 1:
+                log.info(
+                    "FreeGameRadar request: %s [page=%s, limit=%s, platform=%s, search=%s]",
+                    response.url, page, effective_limit, platform or "all", search or "-",
+                )
             if response.status_code == 429 or response.status_code >= 500:
                 retry_after = response.headers.get("Retry-After", "")
                 try:
