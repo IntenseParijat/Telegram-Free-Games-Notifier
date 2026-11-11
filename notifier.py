@@ -350,9 +350,9 @@ def _canonical_game_title(value: Any) -> str:
     """Normalize store-specific giveaway titles to their base game title."""
     title = _normalised_text(value)
     suffix_patterns = (
-        r"\s+mobile\\s+giveaway$",
-        r"\s+android\\s+ios\\s+giveaway$",
-        r"\s+ios\\s+android\\s+giveaway$",
+        r"\s+mobile\s+giveaway$",
+        r"\s+android\s+ios\s+giveaway$",
+        r"\s+ios\s+android\s+giveaway$",
         r"\s+giveaway$",
         r"\s+mobile$",
         r"\s+android$",
