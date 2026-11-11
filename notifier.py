@@ -310,33 +310,44 @@ def fetch_game_search(
 
 
 def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
-    """Fill descriptive metadata; never import offer-state fields from catalogue rows."""
+    """Fill display metadata only; catalogue results never create offer state."""
     merged = dict(primary)
-    forbidden = {
-        "is_free", "start_date", "startDate", "end_date", "endDate",
-        "offer_end_date", "offerEndDate", "free_until", "freeUntil",
-        "offer_expires_at", "expires_at", "ends_at", "discount_percent",
-        "final_price", "discount_price",
-    }
-    for key, value in secondary.items():
-        if key in forbidden:
-            continue
-        if merged.get(key) in (None, "", [], {}):
-            merged[key] = value
+    for field in ("description", "image_url", "game_url"):
+        if merged.get(field) in (None, "") and secondary.get(field) not in (None, ""):
+            merged[field] = secondary[field]
     return merged
 
 
+def _canonical_game_title(value: Any) -> str:
+    title = _normalised_text(value)
+    return re.sub(r"\\s+(?:mobile|android|ios)$", "", title).strip()
+
+
+def _platform_family(value: Any) -> str:
+    text = _normalised_text(value)
+    if "epic" in text or "egs" in text:
+        return "epic"
+    if "steam" in text:
+        return "steam"
+    if "playstation" in text or "ps4" in text or "ps5" in text:
+        return "playstation"
+    if "xbox" in text:
+        return "xbox"
+    if any(term in text.split() for term in ("android", "ios")) or "mobile" in text:
+        return "mobile"
+    return text
+
+
 def _same_game_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    """Conservative normalized title + platform match for catalogue enrichment."""
-    left_title = _normalised_text(left.get("title"))
-    right_title = _normalised_text(right.get("title"))
+    """Require exact normalized title and compatible store families."""
+    left_title = _canonical_game_title(left.get("title"))
+    right_title = _canonical_game_title(right.get("title"))
     if not left_title or left_title != right_title:
         return False
-    left_platform = _normalised_text(left.get("platform"))
-    right_platform = _normalised_text(right.get("platform"))
-    if left_platform and right_platform and left_platform != right_platform:
-        return False
-    return True
+    left_platform = _platform_family(left.get("platform"))
+    right_platform = _platform_family(right.get("platform"))
+    return not left_platform or not right_platform or left_platform == right_platform
+
 
 
 GAMERPOWER_API_URL = "https://www.gamerpower.com/api/giveaways"
@@ -544,18 +555,31 @@ def _mobile_price_amount(value: Any) -> float:
 
 
 def _parse_price_display(value: Any) -> float:
-    """Parse display values such as '$7.99', '€7,99', or '7.99 USD'."""
+    """Parse currency display values without truncating thousands separators."""
     if value is None:
         return 0.0
-    raw = str(value).strip()
-    match = re.search(r"([0-9]+(?:[.,][0-9]{1,2})?)", raw)
-    if not match:
+    raw = re.sub(r"[^0-9,.]", "", str(value).strip())
+    if not raw:
         return 0.0
-    numeric = match.group(1).replace(",", ".")
+
+    if "," in raw and "." in raw:
+        # The last separator is the decimal mark; the other is a group mark.
+        if raw.rfind(",") > raw.rfind("."):
+            raw = raw.replace(".", "").replace(",", ".")
+        else:
+            raw = raw.replace(",", "")
+    elif "," in raw:
+        tail = raw.rsplit(",", 1)[-1]
+        if len(tail) in (1, 2):
+            raw = raw.replace(",", ".")
+        else:
+            raw = raw.replace(",", "")
+
     try:
-        return float(numeric)
+        return float(raw)
     except ValueError:
         return 0.0
+
 
 
 def fetch_epic_mobile_platform(
@@ -1294,11 +1318,12 @@ def _targeted_metadata_enrichment(
     api_key: str | None,
     games: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Fill descriptive fields for eligible-looking records with missing metadata."""
+    """Enrich only verified eligible candidates, with a small lookup budget."""
     enriched = list(games)
     targets = [
         game for game in enriched
-        if str(game.get("title") or "").strip()
+        if is_eligible_temporary_offer(game)
+        and str(game.get("title") or "").strip()
         and (
             not game.get("description")
             or not game.get("image_url")
@@ -1306,13 +1331,24 @@ def _targeted_metadata_enrichment(
         )
     ]
     if not targets:
+        log.info("Metadata enrichment: no eligible listings need descriptive fields")
         return enriched
 
-    # Limit lookup volume to candidates that might be posted, but don't allow
-    # catalogue data to manufacture missing offer dates or free/paid state.
-    for game in targets:
+    max_lookups = 10
+    if len(targets) > max_lookups:
+        log.warning(
+            "Metadata enrichment capped at %s lookups; %s additional eligible rows keep their original metadata",
+            max_lookups, len(targets) - max_lookups,
+        )
+
+    searched: set[tuple[str, str]] = set()
+    for game in targets[:max_lookups]:
         title = str(game.get("title") or "").strip()
         platform = str(game.get("platform") or "").strip() or None
+        lookup_key = (_canonical_game_title(title), _platform_family(platform))
+        if lookup_key in searched:
+            continue
+        searched.add(lookup_key)
         try:
             records = fetch_game_search(session, api_key, title, platform)
         except Exception:
@@ -1321,17 +1357,25 @@ def _targeted_metadata_enrichment(
 
         match = next((record for record in records if _same_game_listing(game, record)), None)
         if not match:
-            log.info("Metadata lookup for %s returned %s results but no exact title/platform match", title, len(records))
+            log.info(
+                "Metadata lookup for %s returned %s results but no exact title/store match",
+                title, len(records),
+            )
             continue
+
         before = dict(game)
         game.update(merge_game_metadata(game, match))
         filled = [
             field for field in ("description", "image_url", "game_url")
             if before.get(field) in (None, "") and game.get(field) not in (None, "")
         ]
-        log.info("Metadata lookup enriched %s fields for %s: %s", len(filled), title, ", ".join(filled) or "none")
+        log.info(
+            "Metadata lookup enriched %s for %s: %s",
+            len(filled), title, ", ".join(filled) or "no missing fields matched",
+        )
 
     return enriched
+
 
 
 async def run_notifier() -> None:
