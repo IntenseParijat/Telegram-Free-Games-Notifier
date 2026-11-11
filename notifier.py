@@ -1294,6 +1294,12 @@ async def run_notifier() -> None:
             raise RuntimeError("FreeGameRadar scan was partial and returned no records; retry next run.")
         return
 
+    # Enrich source rows through the documented /games?search= endpoint
+    # before eligibility filtering. Catalogue fields cannot create or alter
+    # promotion dates, price or is_free state.
+    with requests.Session() as metadata_session:
+        games = _targeted_metadata_enrichment(metadata_session, api_key, games)
+
     current_games: dict[str, dict[str, Any]] = {}
     rejection_counts: dict[str, int] = {}
     for game in games:
