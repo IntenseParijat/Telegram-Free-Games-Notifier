@@ -1136,6 +1136,9 @@ def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
         or game.get("claim_end_date") or game.get("claimEndDate")
         or game.get("promotion_end_date") or game.get("promotionEndDate")
         or game.get("offer_expires_at") or game.get("expires_at")
+        or game.get("expiration_date") or game.get("expiry_date")
+        or game.get("expire_date") or game.get("offer_expires")
+        or game.get("valid_until") or game.get("end_at")
         or game.get("ends_at")
     )
     if end_date:
@@ -1287,6 +1290,9 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
         or game.get("claim_end_date") or game.get("claimEndDate")
         or game.get("promotion_end_date") or game.get("promotionEndDate")
         or game.get("offer_expires_at") or game.get("expires_at")
+        or game.get("expiration_date") or game.get("expiry_date")
+        or game.get("expire_date") or game.get("offer_expires")
+        or game.get("valid_until") or game.get("end_at")
         or game.get("ends_at")
     )
     end_at = _parse_offer_datetime(end_value, date_only_end=True)
@@ -1326,7 +1332,10 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     )
     excluded_phrases = (
         "game pass", "xbox game pass", "pc game pass", "playstation plus",
-        "ps plus", "subscription", "included with", "included in pass",
+        "ps plus", "included with subscription", "included in subscription",
+        "subscription required", "requires subscription", "subscription only",
+        "subscription catalogue", "subscription catalog",
+        "included with", "included in pass",
         "game catalog", "game catalogue", "permanently free",
     )
     if any(_normalised_text(term) in searchable for term in excluded_phrases):
@@ -1351,8 +1360,11 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     if any(_normalised_text(term) in classification for term in permanent_free_markers):
         return "free_to_play_marker"
 
-    offer_type = _normalised_text(game.get("type") or game.get("offer_type") or game.get("offerType"))
-    if any(term in offer_type for term in ("dlc", "loot", "beta", "in game")):
+    offer_classification = " ".join(
+        flatten(game.get(field))
+        for field in ("category", "type", "offer_type", "offerType", "pricing_type", "availability_type")
+    )
+    if any(term in offer_classification for term in ("dlc", "loot", "beta", "in game")):
         return "non_standalone_game_offer"
     return "eligible"
 
