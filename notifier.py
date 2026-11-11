@@ -350,13 +350,13 @@ def _canonical_game_title(value: Any) -> str:
     """Normalize store-specific giveaway titles to their base game title."""
     title = _normalised_text(value)
     suffix_patterns = (
-        r"\\s+mobile\\s+giveaway$",
-        r"\\s+android\\s+ios\\s+giveaway$",
-        r"\\s+ios\\s+android\\s+giveaway$",
-        r"\\s+giveaway$",
-        r"\\s+mobile$",
-        r"\\s+android$",
-        r"\\s+ios$",
+        r"\s+mobile\\s+giveaway$",
+        r"\s+android\\s+ios\\s+giveaway$",
+        r"\s+ios\\s+android\\s+giveaway$",
+        r"\s+giveaway$",
+        r"\s+mobile$",
+        r"\s+android$",
+        r"\s+ios$",
     )
     changed = True
     while changed:
@@ -954,7 +954,7 @@ def game_key(game: dict[str, Any]) -> str:
 
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
     start_at = _parse_offer_datetime(_offer_start_value(game))
