@@ -347,22 +347,26 @@ def merge_game_metadata(primary: dict[str, Any], secondary: dict[str, Any]) -> d
 
 
 def _canonical_game_title(value: Any) -> str:
-    """Normalize store-specific giveaway titles to their base game title."""
+    """Normalize provider suffixes and platform labels to one base game title."""
     title = _normalised_text(value)
+    # Repeatedly remove provider/platform descriptions, e.g.
+    # "Knightica (Epic Games) Giveaway" -> "knightica".
     suffix_patterns = (
-        r"\s+mobile\s+giveaway$",
-        r"\s+android\s+ios\s+giveaway$",
-        r"\s+ios\s+android\s+giveaway$",
-        r"\s+giveaway$",
-        r"\s+mobile$",
-        r"\s+android$",
-        r"\s+ios$",
+        r"\\s+mobile\\s+giveaway$",
+        r"\\s+epic\\s+games\\s+giveaway$",
+        r"\\s+epic\\s+giveaway$",
+        r"\\s+giveaway$",
+        r"\\s+mobile$",
+        r"\\s+android$",
+        r"\\s+ios$",
+        r"\\s+epic\\s+games$",
+        r"\\s+epic$",
     )
     changed = True
     while changed:
         changed = False
         for pattern in suffix_patterns:
-            normalized = re.sub(pattern, "", title).strip(" -_()")
+            normalized = re.sub(pattern, "", title).strip()
             if normalized != title:
                 title = normalized
                 changed = True
@@ -843,6 +847,7 @@ def merge_platform_labels(existing: Any, incoming: Any) -> str:
     return ", ".join(values)
 
 
+
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch every store independently, then mobile sources, preserving partial results."""
     platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
@@ -859,9 +864,22 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
                 existing["platform"] = merge_platform_labels(
                     existing.get("platform"), game.get("platform")
                 )
-                for field in ("description", "image_url", "game_url"):
-                    if existing.get(field) in (None, "") and game.get(field):
-                        existing[field] = game[field]
+                # Prefer the official Epic storefront title/description/image/link
+                # over aggregator paraphrases for the one combined mobile post.
+                existing_is_epic = "epic mobile storefront" in _normalised_text(existing.get("source"))
+                incoming_is_epic = "epic mobile storefront" in _normalised_text(game.get("source"))
+                if incoming_is_epic and not existing_is_epic:
+                    for field in ("title", "description", "image_url", "game_url", "original_price", "source"):
+                        if game.get(field) not in (None, ""):
+                            existing[field] = game[field]
+                else:
+                    for field in ("description", "image_url", "game_url"):
+                        if existing.get(field) in (None, "") and game.get(field):
+                            existing[field] = game[field]
+                log.info(
+                    "Collapsed duplicate giveaway source into %s (incoming=%s)",
+                    key, game.get("source", "unknown"),
+                )
                 continue
             seen_global[key] = game
             all_games.append(game)
@@ -923,21 +941,19 @@ def _offer_start_value(game: dict[str, Any]) -> Any:
 
 
 def game_key(game: dict[str, Any]) -> str:
-    """Identify mobile campaigns across sources; preserve store-specific keys elsewhere."""
+    """Use one title+expiry key for mobile giveaway campaigns across providers."""
     platform = str(game.get("platform") or "Unknown").strip().casefold()
     source = _normalised_text(game.get("source"))
+    title_value = game.get("title")
     normalized_platform = _normalised_text(platform)
     is_mobile = (
         "mobile" in source
-        or "android" in normalized_platform.split()
-        or "ios" in normalized_platform.split()
-        or "mobile" in normalized_platform.split()
-        or "android" in _normalised_text(game.get("title")).split()
-        or "ios" in _normalised_text(game.get("title")).split()
+        or any(token in normalized_platform.split() for token in ("android", "ios", "mobile"))
+        or any(token in _normalised_text(title_value).split() for token in ("android", "ios", "mobile"))
     )
 
     if is_mobile:
-        identifier = _canonical_game_title(game.get("title"))
+        identifier = _canonical_game_title(title_value)
         end_value = (
             game.get("end_date") or game.get("endDate")
             or game.get("offer_end_date") or game.get("offerEndDate")
@@ -954,7 +970,7 @@ def game_key(game: dict[str, Any]) -> str:
 
     identifier = str(game.get("game_id") or game.get("id") or "").strip()
     if not identifier:
-        identifier = re.sub(r"\s+", " ", str(game.get("title") or "").strip()).casefold()
+        identifier = _normalised_text(title_value)
     if not identifier:
         raise ValueError("Game record has no usable game_id, id, or title")
     start_at = _parse_offer_datetime(_offer_start_value(game))
@@ -1120,7 +1136,7 @@ def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
         or game.get("ends_at")
     )
     if end_date:
-        blocks.append(f"⏳ <b>Free until:</b> {safe_text(end_date)}")
+        blocks.append(f"⏳ <b>Free until:</b> {format_offer_expiry(end_date)}")
 
     footer = footer_lines()
     if footer:
@@ -1202,6 +1218,24 @@ async def send_one(client: TelegramClient, channel: str, game: dict[str, Any]) -
 
 def _normalised_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+
+def format_offer_expiry(value: Any) -> str:
+    """Render an offer expiry as YYYY-MM-DD HH:MM UTC without ISO noise."""
+    from datetime import datetime, timezone
+
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = _parse_offer_datetime(value, date_only_end=True)
+
+    if parsed is None:
+        return safe_text(value)
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _parse_offer_datetime(value: Any, date_only_end: bool = False):
