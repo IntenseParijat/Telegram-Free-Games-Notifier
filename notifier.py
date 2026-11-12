@@ -352,15 +352,15 @@ def _canonical_game_title(value: Any) -> str:
     # Repeatedly remove provider/platform descriptions, e.g.
     # "Knightica (Epic Games) Giveaway" -> "knightica".
     suffix_patterns = (
-        r"\\s+mobile\\s+giveaway$",
-        r"\\s+epic\\s+games\\s+giveaway$",
-        r"\\s+epic\\s+giveaway$",
-        r"\\s+giveaway$",
-        r"\\s+mobile$",
-        r"\\s+android$",
-        r"\\s+ios$",
-        r"\\s+epic\\s+games$",
-        r"\\s+epic$",
+        r"\s+mobile\s+giveaway$",
+        r"\s+epic\s+games\s+giveaway$",
+        r"\s+epic\s+giveaway$",
+        r"\s+giveaway$",
+        r"\s+mobile$",
+        r"\s+android$",
+        r"\s+ios$",
+        r"\s+epic\s+games$",
+        r"\s+epic$",
     )
     changed = True
     while changed:
@@ -1257,7 +1257,7 @@ def _parse_offer_datetime(value: Any, date_only_end: bool = False):
 
     # A date-only end date represents the full calendar day, not midnight at
     # its beginning. Start dates keep the normal midnight interpretation.
-    if re.fullmatch(r"\d{4}-\\d{2}-\\d{2}", raw):
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
         try:
             parsed = datetime.strptime(raw, "%Y-%m-%d")
             if date_only_end:
