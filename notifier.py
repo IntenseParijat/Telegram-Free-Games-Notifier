@@ -1005,6 +1005,22 @@ def load_state() -> set[str]:
             "mobile:chants of sennaar mobile:until:2026-11-12",
             "mobile:chants of sennaar:until:2026-11-12",
         )
+        historical_campaigns = {
+            # Chants of Sennaar source-title variants posted during the earlier
+            # Epic/GamerPower duplicate bug.
+            "mobile:chants of sennaar mobile giveaway:until:2026-11-12": "mobile:chants of sennaar:until:2026-11-12",
+            "mobile:chants of sennaar mobile:until:2026-11-12": "mobile:chants of sennaar:until:2026-11-12",
+            "mobile:chants of sennaar:until:2026-11-12": "mobile:chants of sennaar:until:2026-11-12",
+            # Knightica was previously posted using two source-dependent titles.
+            "mobile:knightica epic games giveaway:until:2026-11-19": "mobile:knightica:until:2026-11-19",
+            "mobile:knightica epic games:until:2026-11-19": "mobile:knightica:until:2026-11-19",
+            "mobile:knightica:until:2026-11-19": "mobile:knightica:until:2026-11-19",
+        }
+        for old_key, canonical_key in historical_campaigns.items():
+            if old_key in seen and canonical_key not in seen:
+                seen.add(canonical_key)
+                log.info("Migrated historical mobile giveaway key %s -> %s", old_key, canonical_key)
+
         if any(key in seen for key in historical_mobile_keys):
             canonical_key = "mobile:chants of sennaar:until:2026-11-12"
             if canonical_key not in seen:
