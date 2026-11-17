@@ -875,24 +875,61 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
     payload = response.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
         raise RuntimeError(f"itch.io on-sale page {page} returned an unexpected JSON response")
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(payload["content"], "html.parser")
-    candidates: list[dict[str, Any]] = []
-    for cell in soup.select(".game_cell[data-game_id]"):
-        link = cell.select_one("a.title.game_link")
-        if not link:
-            continue
-        url = _itch_sale_candidate_url(link.get("href"))
-        if not url:
-            continue
-        image = cell.select_one(".game_thumb img")
-        image_url = valid_http_url(image.get("data-lazy_src") or image.get("src")) if image else None
-        candidates.append({
-            "itch_id": str(cell.get("data-game_id") or ""),
-            "title_hint": link.get_text(" ", strip=True),
-            "page_url": url,
-            "image_url": image_url,
-        })
+    from html.parser import HTMLParser
+
+    class ItchSaleHTMLParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.candidates: list[dict[str, Any]] = []
+            self.current: dict[str, Any] | None = None
+            self.capture_title = False
+            self.title_parts: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            attr = {key: value for key, value in attrs}
+            classes = set((attr.get("class") or "").split())
+
+            if tag == "div" and "game_cell" in classes and attr.get("data-game_id"):
+                self.current = {
+                    "itch_id": str(attr.get("data-game_id") or ""),
+                    "title_hint": "",
+                    "page_url": None,
+                    "image_url": None,
+                }
+                self.title_parts = []
+                self.capture_title = False
+
+            if self.current is None:
+                return
+
+            if tag == "a" and "title" in classes and "game_link" in classes:
+                self.current["page_url"] = _itch_sale_candidate_url(attr.get("href"))
+                self.capture_title = True
+                self.title_parts = []
+
+            if tag == "img" and "game_thumb" in classes:
+                pass
+            if tag == "img" and self.current.get("image_url") is None:
+                self.current["image_url"] = valid_http_url(attr.get("data-lazy_src") or attr.get("src"))
+
+        def handle_data(self, data: str) -> None:
+            if self.current is not None and self.capture_title:
+                self.title_parts.append(data)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "a" and self.capture_title and self.current is not None:
+                self.current["title_hint"] = " ".join(" ".join(self.title_parts).split())
+                self.capture_title = False
+
+            if tag == "div" and self.current is not None:
+                if self.current.get("page_url") and self.current.get("title_hint"):
+                    self.candidates.append(self.current)
+                self.current = None
+                self.capture_title = False
+
+    parser = ItchSaleHTMLParser()
+    parser.feed(payload["content"])
+    candidates = parser.candidates
     try:
         total_items = int(payload.get("num_items") or 0)
     except (TypeError, ValueError):
