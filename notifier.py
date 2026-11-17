@@ -882,6 +882,7 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
             super().__init__(convert_charrefs=True)
             self.candidates: list[dict[str, Any]] = []
             self.current: dict[str, Any] | None = None
+            self.cell_depth = 0
             self.capture_title = False
             self.title_parts: list[str] = []
 
@@ -889,44 +890,56 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
             attr = {key: value for key, value in attrs}
             classes = set((attr.get("class") or "").split())
 
-            if tag == "div" and "game_cell" in classes and attr.get("data-game_id"):
+            if self.current is None and tag == "div" and "game_cell" in classes and attr.get("data-game_id"):
                 self.current = {
                     "itch_id": str(attr.get("data-game_id") or ""),
                     "title_hint": "",
                     "page_url": None,
                     "image_url": None,
                 }
+                self.cell_depth = 1
                 self.title_parts = []
                 self.capture_title = False
+                return
 
             if self.current is None:
                 return
+
+            if tag == "div":
+                self.cell_depth += 1
 
             if tag == "a" and "title" in classes and "game_link" in classes:
                 self.current["page_url"] = _itch_sale_candidate_url(attr.get("href"))
                 self.capture_title = True
                 self.title_parts = []
 
-            if tag == "img" and "game_thumb" in classes:
-                pass
             if tag == "img" and self.current.get("image_url") is None:
                 self.current["image_url"] = valid_http_url(attr.get("data-lazy_src") or attr.get("src"))
+
+        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self.handle_starttag(tag, attrs)
+            self.handle_endtag(tag)
 
         def handle_data(self, data: str) -> None:
             if self.current is not None and self.capture_title:
                 self.title_parts.append(data)
 
         def handle_endtag(self, tag: str) -> None:
-            if tag == "a" and self.capture_title and self.current is not None:
+            if self.current is None:
+                return
+
+            if tag == "a" and self.capture_title:
                 self.current["title_hint"] = " ".join(" ".join(self.title_parts).split())
                 self.capture_title = False
 
-            if tag == "div" and self.current is not None:
-                if self.current.get("page_url") and self.current.get("title_hint"):
-                    self.candidates.append(self.current)
-                self.current = None
-                self.capture_title = False
-
+            if tag == "div":
+                self.cell_depth -= 1
+                if self.cell_depth <= 0:
+                    if self.current.get("page_url") and self.current.get("title_hint"):
+                        self.candidates.append(self.current)
+                    self.current = None
+                    self.cell_depth = 0
+                    self.capture_title = False
     parser = ItchSaleHTMLParser()
     parser.feed(payload["content"])
     candidates = parser.candidates
