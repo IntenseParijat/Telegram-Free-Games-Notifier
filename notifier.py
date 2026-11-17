@@ -848,6 +848,168 @@ def merge_platform_labels(existing: Any, incoming: Any) -> str:
 
 
 
+ITCH_SALE_FEED_URL = "https://itch.io/games/newest/on-sale"
+
+
+def _itch_sale_candidate_url(raw_url: Any) -> str | None:
+    url = valid_http_url(raw_url)
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc.endswith("itch.io"):
+        return None
+    if parsed.netloc in {"itch.io", "www.itch.io"}:
+        return None
+    return url.rstrip("/")
+
+
+def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[dict[str, Any]], bool]:
+    params = {"page": page, "format": "json"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; IntenseGamingFreeGameNotifier/1.0)",
+        "Cache-Control": "no-cache",
+    }
+    response = session.get(
+        ITCH_SALE_FEED_URL,
+        params=params,
+        headers=headers,
+        timeout=REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+        raise RuntimeError(f"itch.io on-sale page {page} returned an unexpected JSON response")
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(payload["content"], "html.parser")
+    candidates: list[dict[str, Any]] = []
+    for cell in soup.select(".game_cell[data-game_id]"):
+        link = cell.select_one("a.title.game_link")
+        if not link:
+            continue
+        url = _itch_sale_candidate_url(link.get("href"))
+        if not url:
+            continue
+        image = cell.select_one(".game_thumb img")
+        image_url = None
+        if image:
+            image_url = valid_http_url(image.get("data-lazy_src") or image.get("src"))
+        candidates.append({
+            "itch_id": str(cell.get("data-game_id") or ""),
+            "title_hint": link.get_text(" ", strip=True),
+            "page_url": url,
+            "image_url": image_url,
+        })
+    has_more = bool(payload.get("num_items", 0)) and len(candidates) > 0
+    return candidates, has_more
+
+
+def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
+    """Discover active itch.io sales, then verify each on its official /data.json."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    games: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    scan_complete = False
+    max_pages = 5
+
+    for page in range(1, max_pages + 1):
+        try:
+            candidates, has_more = _fetch_itch_sale_page(session, page)
+        except Exception:
+            log.exception("itch.io active-sales page %s failed", page)
+            return games, False
+
+        log.info("itch.io active-sales page %s: %s candidates", page, len(candidates))
+        if not candidates:
+            scan_complete = True
+            break
+
+        for candidate in candidates:
+            url = candidate["page_url"]
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            try:
+                response = session.get(
+                    url + "/data.json",
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "IntenseGamingFreeGameNotifier/1.0",
+                    },
+                    timeout=REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+            except Exception:
+                log.warning("itch.io verification failed for %s", url, exc_info=True)
+                continue
+
+            if not isinstance(data, dict) or data.get("errors"):
+                log.info("itch.io skipped %s: official game data returned errors", candidate["title_hint"])
+                continue
+
+            sale = data.get("sale")
+            if not isinstance(sale, dict) or sale.get("rate") != 100:
+                continue
+
+            current_price = _parse_price_display(data.get("price"))
+            normal_price = _parse_price_display(data.get("original_price"))
+            if normal_price <= 0:
+                normal_price = current_price
+            end_value = sale.get("end_date")
+            end_at = _parse_offer_datetime(end_value)
+            if current_price != 0 or normal_price <= 0:
+                log.info(
+                    "itch.io skipped %s: not a zero-price sale with a positive original price",
+                    data.get("title") or candidate["title_hint"],
+                )
+                continue
+            if end_at is None or end_at <= now:
+                log.info(
+                    "itch.io skipped %s: sale expiry missing/expired (%r)",
+                    data.get("title") or candidate["title_hint"], end_value,
+                )
+                continue
+
+            title = str(data.get("title") or candidate["title_hint"]).strip()
+            game_id = str(data.get("id") or candidate["itch_id"] or _normalised_text(title))
+            cover = valid_http_url(data.get("cover_image")) or candidate.get("image_url")
+            offer_start = sale.get("start_date")
+            games.append({
+                "title": title,
+                "description": str(data.get("short_text") or data.get("description") or ""),
+                "platform": "itch.io",
+                "game_id": game_id,
+                "id": game_id,
+                "is_free": True,
+                "original_price": normal_price,
+                "final_price": 0,
+                "discount_price": 0,
+                "start_date": offer_start,
+                "end_date": end_value,
+                "game_url": url,
+                "image_url": cover,
+                "type": "BASE_GAME",
+                "offer_type": "BASE_GAME",
+                "source": "itch.io active 100% sale",
+                "source_url": "https://itch.io/games/newest/on-sale",
+            })
+            log.info(
+                "itch.io qualified %s: original=%s, starts=%s, ends=%s",
+                title, normal_price, offer_start, end_value,
+            )
+
+        if not has_more or len(candidates) == 0:
+            scan_complete = True
+            break
+    else:
+        log.warning("itch.io active-sales scan hit the %s-page cap; scan is partial", max_pages)
+
+    log.info("itch.io active-sales scan: %s qualifying full-game offer(s)", len(games))
+    return games, scan_complete
+
+
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch every store independently, then mobile sources, preserving partial results."""
     platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
@@ -919,6 +1081,14 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             gamerpower_games, gamerpower_complete = [], False
         all_complete = all_complete and gamerpower_complete
         merge_records(gamerpower_games, "GamerPower mobile feed")
+
+        try:
+            itch_games, itch_complete = fetch_itchio_games(session)
+        except Exception:
+            log.exception("itch.io active-sales feed failed")
+            itch_games, itch_complete = [], False
+        all_complete = all_complete and itch_complete
+        merge_records(itch_games, "itch.io active-sales feed")
 
     log.info(
         "Combined catalogue: %s unique records; all queried sources complete=%s",
@@ -1127,7 +1297,8 @@ def valid_http_url(value: Any) -> str | None:
 
 def _caption_blocks(game: dict[str, Any]) -> tuple[str, str, str]:
     """Return title, description and trailing fixed blocks in display order."""
-    title = f"<b>{safe_text(game.get('title') or 'Untitled game')}</b>"
+    display_title = _canonical_game_title(game.get("title")) or "Untitled game"
+    title = f"<b>{safe_text(display_title.title() if display_title.islower() else display_title)}</b>"
     description = safe_text(str(game.get("description") or "").strip()) if enabled("description") else ""
 
     blocks: list[str] = []
