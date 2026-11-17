@@ -870,12 +870,7 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
         "User-Agent": "Mozilla/5.0 (compatible; IntenseGamingFreeGameNotifier/1.0)",
         "Cache-Control": "no-cache",
     }
-    response = session.get(
-        ITCH_SALE_FEED_URL,
-        params=params,
-        headers=headers,
-        timeout=REQUEST_TIMEOUT,
-    )
+    response = session.get(ITCH_SALE_FEED_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
@@ -891,27 +886,29 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
         if not url:
             continue
         image = cell.select_one(".game_thumb img")
-        image_url = None
-        if image:
-            image_url = valid_http_url(image.get("data-lazy_src") or image.get("src"))
+        image_url = valid_http_url(image.get("data-lazy_src") or image.get("src")) if image else None
         candidates.append({
             "itch_id": str(cell.get("data-game_id") or ""),
             "title_hint": link.get_text(" ", strip=True),
             "page_url": url,
             "image_url": image_url,
         })
-    has_more = bool(payload.get("num_items", 0)) and len(candidates) > 0
-    return candidates, has_more
+    try:
+        total_items = int(payload.get("num_items") or 0)
+    except (TypeError, ValueError):
+        total_items = 0
+    return candidates, total_items > 0
 
 
 def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
-    """Discover active itch.io sales, then verify each on its official /data.json."""
+    """Discover active itch.io sales and verify every candidate with official game data."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     games: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    seen_pages: set[tuple[str, ...]] = set()
     scan_complete = False
-    max_pages = 5
+    max_pages = 10
 
     for page in range(1, max_pages + 1):
         try:
@@ -921,9 +918,14 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             return games, False
 
         log.info("itch.io active-sales page %s: %s candidates", page, len(candidates))
+        fingerprint = tuple(candidate["page_url"] for candidate in candidates)
         if not candidates:
             scan_complete = True
             break
+        if fingerprint in seen_pages:
+            log.error("itch.io page %s repeated an earlier result page; stopping incomplete", page)
+            break
+        seen_pages.add(fingerprint)
 
         for candidate in candidates:
             url = candidate["page_url"]
@@ -933,10 +935,7 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             try:
                 response = session.get(
                     url + "/data.json",
-                    headers={
-                        "Accept": "application/json",
-                        "User-Agent": "IntenseGamingFreeGameNotifier/1.0",
-                    },
+                    headers={"Accept": "application/json", "User-Agent": "IntenseGamingFreeGameNotifier/1.0"},
                     timeout=REQUEST_TIMEOUT,
                 )
                 response.raise_for_status()
@@ -950,32 +949,39 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
                 continue
 
             sale = data.get("sale")
-            if not isinstance(sale, dict) or sale.get("rate") != 100:
+            if not isinstance(sale, dict):
+                continue
+            try:
+                sale_rate = float(sale.get("rate"))
+            except (TypeError, ValueError):
+                continue
+            if sale_rate != 100:
                 continue
 
+            # Official itch.io game data exposes current and original prices separately.
+            # Missing retail prices are not inferred from the sale percentage.
             current_price = _parse_price_display(data.get("price"))
-            normal_price = _parse_price_display(data.get("original_price"))
-            if normal_price <= 0:
-                normal_price = current_price
+            original_price = _parse_price_display(data.get("original_price"))
+            start_value = sale.get("start_date")
             end_value = sale.get("end_date")
+            start_at = _parse_offer_datetime(start_value)
             end_at = _parse_offer_datetime(end_value)
-            if current_price != 0 or normal_price <= 0:
+            if current_price != 0 or original_price <= 0:
                 log.info(
-                    "itch.io skipped %s: not a zero-price sale with a positive original price",
+                    "itch.io skipped %s: not verifiably a zero-price offer with positive retail price",
                     data.get("title") or candidate["title_hint"],
                 )
                 continue
-            if end_at is None or end_at <= now:
+            if start_at is None or start_at > now or end_at is None or end_at <= now:
                 log.info(
-                    "itch.io skipped %s: sale expiry missing/expired (%r)",
-                    data.get("title") or candidate["title_hint"], end_value,
+                    "itch.io skipped %s: sale is not currently active (starts=%r, ends=%r)",
+                    data.get("title") or candidate["title_hint"], start_value, end_value,
                 )
                 continue
 
             title = str(data.get("title") or candidate["title_hint"]).strip()
             game_id = str(data.get("id") or candidate["itch_id"] or _normalised_text(title))
             cover = valid_http_url(data.get("cover_image")) or candidate.get("image_url")
-            offer_start = sale.get("start_date")
             games.append({
                 "title": title,
                 "description": str(data.get("short_text") or data.get("description") or ""),
@@ -983,10 +989,10 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
                 "game_id": game_id,
                 "id": game_id,
                 "is_free": True,
-                "original_price": normal_price,
+                "original_price": original_price,
                 "final_price": 0,
                 "discount_price": 0,
-                "start_date": offer_start,
+                "start_date": start_value,
                 "end_date": end_value,
                 "game_url": url,
                 "image_url": cover,
@@ -995,12 +1001,9 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
                 "source": "itch.io active 100% sale",
                 "source_url": "https://itch.io/games/newest/on-sale",
             })
-            log.info(
-                "itch.io qualified %s: original=%s, starts=%s, ends=%s",
-                title, normal_price, offer_start, end_value,
-            )
+            log.info("itch.io qualified %s: original=%s, starts=%s, ends=%s", title, original_price, start_value, end_value)
 
-        if not has_more or len(candidates) == 0:
+        if not has_more:
             scan_complete = True
             break
     else:
