@@ -128,6 +128,14 @@ Epic mobile records must contain a currently active, zero-price `Claim` purchase
 
 GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios`, `type=game`, and `sort-by=date`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The claim URL intentionally uses GamerPower's `open_giveaway_url` redirect, providing the active hyperlink back to GamerPower required by its API terms. The primary FreeGameRadar API remains the source for Epic PC, Steam, PlayStation, and Xbox offers.
 
+## itch.io active giveaways
+
+The notifier also checks itch.io's `/games/newest/on-sale?format=json` feed, independently of FreeGameRadar. It verifies each candidate through that game's official `/data.json` response and only accepts a 100% sale where the current price is zero, the original retail price is positive, and the sale has a future expiry. The feed commonly omits `sale.start_date`; inclusion in the current on-sale feed plus the official 100% sale rate and future expiry are used as the active-offer signal.
+
+The scan prioritizes titles explicitly requested for checking (currently the Night Maniac series), then verifies recent candidates. It uses a bounded number of game-detail requests and a delay between requests to reduce the chance of itch.io HTTP 429 rate limiting. If the cap is reached, the feed is marked partial and the next scheduled run can continue discovering newer candidates. Game IDs are stored in the same duplicate-state file after successful Telegram delivery.
+
+All posted titles are normalized to the base game name. Provider labels such as `(Epic Games) Giveaway` are removed from the title line; platform information remains in its own caption line. Offer expiry timestamps are rendered as `YYYY-MM-DD HH:MM UTC`, without milliseconds or the ISO `Z` suffix.
+
 ## API pagination and recovery
 
 FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pro users can set the GitHub Actions repository variable `FREEGAMERADAR_API_LIMIT=200`; it is not assumed automatically because the API key does not reveal its tier to the notifier.
