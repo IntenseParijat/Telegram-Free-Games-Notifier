@@ -1734,6 +1734,15 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     """Explain the first reason an API record is excluded."""
     if not isinstance(game, dict):
         return "malformed_record"
+
+    # FreeGameRadar is a discovery source, not an authority for Epic PC offers.
+    # Prevent any third-party Epic listing from becoming eligible unless it
+    # was independently verified by Epic's own active-promotions response.
+    source = _normalised_text(game.get("source"))
+    platform = _platform_family(game.get("platform"))
+    if platform == "epic" and "epic games store official pc promotions" not in source:
+        return "epic_offer_not_verified_by_official_store"
+
     is_free_value = game.get("is_free")
     is_free = (
         is_free_value
@@ -1764,6 +1773,17 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
         return "missing_or_unparseable_expiry"
     if end_at <= now_at.astimezone(timezone.utc):
         return "offer_expired"
+
+    # An explicit final/discount price must be zero. Missing price metadata is
+    # tolerated for non-Epic sources that historically provide only worth.
+    final_value = (
+        game.get("final_price") if game.get("final_price") not in (None, "")
+        else game.get("finalPrice") if game.get("finalPrice") not in (None, "")
+        else game.get("discount_price") if game.get("discount_price") not in (None, "")
+        else game.get("discountPrice")
+    )
+    if final_value not in (None, "") and _parse_price_display(final_value) != 0:
+        return "final_price_not_zero"
 
     original = (
         game.get("original_price") or game.get("originalPrice")
