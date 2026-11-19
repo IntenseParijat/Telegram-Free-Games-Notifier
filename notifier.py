@@ -1089,7 +1089,8 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
 
 def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     """Fetch every store independently, then mobile sources, preserving partial results."""
-    platforms: tuple[str, ...] = ("Epic", "Steam", "PlayStation", "Xbox")
+    # Epic PC is read from Epic's official active-promotions feed below.
+    platforms: tuple[str, ...] = ("Steam", "PlayStation", "Xbox")
     all_games: list[dict[str, Any]] = []
     seen_global: dict[str, dict[str, Any]] = {}
     all_complete = True
@@ -1139,6 +1140,17 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             all_complete = all_complete and complete
             merge_records(records, f"{platform} FreeGameRadar feed")
 
+        # Epic PC giveaway source of truth: current zero-price BASE_GAME promotions.
+        # Upcoming promotions are deliberately excluded until their start time.
+        try:
+            epic_pc_games, epic_pc_complete = fetch_epic_pc_games(session)
+        except Exception:
+            all_complete = False
+            log.exception("Epic official PC promotions feed failed")
+            epic_pc_games, epic_pc_complete = [], False
+        all_complete = all_complete and epic_pc_complete
+        merge_records(epic_pc_games, "Epic official PC promotions feed")
+
         # Epic mobile is a separate API; PC freeGames/promotions does not include
         # all Android/iOS giveaway listings.
         try:
@@ -1173,6 +1185,178 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
     )
     return all_games, all_complete
 
+
+
+EPIC_PC_API_URL = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
+
+
+def _epic_offer_group(groups: Any) -> list[dict[str, Any]]:
+    """Flatten Epic's grouped promotional offers without accepting malformed rows."""
+    if not isinstance(groups, list):
+        return []
+    flattened: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        offers = group.get("promotionalOffers")
+        if isinstance(offers, list):
+            flattened.extend(offer for offer in offers if isinstance(offer, dict))
+    return flattened
+
+
+def fetch_epic_pc_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
+    """Fetch only currently active, zero-price Epic BASE_GAME promotions."""
+    from datetime import datetime, timezone
+
+    country = os.getenv("EPIC_COUNTRY", "US").strip().upper() or "US"
+    locale = os.getenv("EPIC_LOCALE", "en-US").strip() or "en-US"
+    params = {"locale": locale, "country": country, "allowCountries": country}
+    headers = {
+        "Accept": "application/json",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "Mozilla/5.0 (compatible; Telegram-Free-Games-Notifier/1.0)",
+    }
+
+    payload = None
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = session.get(EPIC_PC_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            candidate = response.json()
+            if not isinstance(candidate, dict):
+                raise RuntimeError("Epic promotions response is not a JSON object")
+            payload = candidate
+            break
+        except (requests.RequestException, ValueError, RuntimeError) as exc:
+            last_error = exc
+            if attempt == MAX_RETRIES:
+                break
+            wait = min(2 ** attempt, 30)
+            log.warning("Epic PC promotions request failed (%s); retrying in %ss", exc, wait)
+            time.sleep(wait)
+
+    if payload is None:
+        raise RuntimeError(f"Could not fetch Epic PC promotions after {MAX_RETRIES} attempts: {last_error}")
+
+    catalog = (((payload.get("data") or {}).get("Catalog") or {}).get("searchStore") or {})
+    elements = catalog.get("elements")
+    if not isinstance(elements, list):
+        raise RuntimeError("Epic promotions response has no data.Catalog.searchStore.elements array")
+
+    now = datetime.now(timezone.utc)
+    normalized: list[dict[str, Any]] = []
+    rejected: dict[str, int] = {}
+
+    for item in elements:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("name") or "Unknown").strip()
+        if str(item.get("offerType") or "").upper() != "BASE_GAME":
+            rejected["not_base_game"] = rejected.get("not_base_game", 0) + 1
+            continue
+
+        promotions = item.get("promotions") or {}
+        if not isinstance(promotions, dict):
+            continue
+        active = []
+        for offer in _epic_offer_group(promotions.get("promotionalOffers")):
+            discount = offer.get("discountSetting") or {}
+            try:
+                discount_percent = float(discount.get("discountPercentage"))
+            except (TypeError, ValueError):
+                continue
+            if discount_percent != 0:
+                continue
+            start_at = _parse_offer_datetime(offer.get("startDate"))
+            end_at = _parse_offer_datetime(offer.get("endDate"))
+            if start_at is None or end_at is None:
+                rejected["invalid_window"] = rejected.get("invalid_window", 0) + 1
+                continue
+            if start_at <= now < end_at:
+                active.append((start_at, end_at, offer))
+
+        if not active:
+            upcoming = _epic_offer_group(promotions.get("upcomingPromotionalOffers"))
+            is_upcoming = False
+            for offer in upcoming:
+                discount = offer.get("discountSetting") or {}
+                start_at = _parse_offer_datetime(offer.get("startDate"))
+                try:
+                    free_price = float(discount.get("discountPercentage")) == 0
+                except (TypeError, ValueError):
+                    free_price = False
+                if free_price and start_at is not None and start_at > now:
+                    is_upcoming = True
+                    break
+            reason = "upcoming_not_yet_free" if is_upcoming else "no_active_zero_price_promotion"
+            rejected[reason] = rejected.get(reason, 0) + 1
+            continue
+
+        start_at, end_at, offer = min(active, key=lambda row: row[0])
+        price = item.get("price") or {}
+        total = price.get("totalPrice") if isinstance(price, dict) else {}
+        total = total if isinstance(total, dict) else {}
+        try:
+            original_amount = float(total.get("originalPrice")) / 100
+            final_amount = float(total.get("discountPrice")) / 100
+        except (TypeError, ValueError):
+            rejected["missing_price_metadata"] = rejected.get("missing_price_metadata", 0) + 1
+            continue
+        if original_amount <= 0 or final_amount != 0:
+            rejected["not_paid_game_zero_price"] = rejected.get("not_paid_game_zero_price", 0) + 1
+            continue
+
+        catalog_ns = item.get("catalogNs") or {}
+        mappings = catalog_ns.get("mappings", []) if isinstance(catalog_ns, dict) else []
+        mappings = mappings if isinstance(mappings, list) else []
+        page_slug = next(
+            (str(mapping.get("pageSlug")).strip() for mapping in mappings
+             if isinstance(mapping, dict) and mapping.get("pageSlug")),
+            "",
+        )
+        if not page_slug:
+            page_slug = str(item.get("productSlug") or "").split("/", 1)[0]
+        if not page_slug:
+            rejected["missing_store_slug"] = rejected.get("missing_store_slug", 0) + 1
+            continue
+
+        images = item.get("keyImages") or []
+        image_url = next(
+            (valid_http_url(image.get("url")) for image in images
+             if isinstance(image, dict) and valid_http_url(image.get("url"))),
+            None,
+        )
+        identifier = str(item.get("id") or item.get("productSlug") or page_slug)
+        normalized.append({
+            "title": title,
+            "description": str(item.get("description") or ""),
+            "platform": "Epic",
+            "game_id": identifier,
+            "id": identifier,
+            "is_free": True,
+            "original_price": original_amount,
+            "final_price": 0,
+            "discount_price": 0,
+            "discount_percent": 100,
+            "currency": total.get("currencyCode"),
+            "start_date": start_at.isoformat().replace("+00:00", "Z"),
+            "end_date": end_at.isoformat().replace("+00:00", "Z"),
+            "game_url": f"https://store.epicgames.com/{locale}/p/{page_slug}",
+            "image_url": image_url,
+            "type": "BASE_GAME",
+            "offer_type": "BASE_GAME",
+            "source": "Epic Games Store official PC promotions",
+            "source_url": "https://store.epicgames.com/free-games",
+            "epic_offer_id": str(offer.get("id") or ""),
+        })
+
+    log.info(
+        "Epic official PC feed: %s catalog items, %s currently free paid BASE_GAME offer(s); exclusions=%s",
+        len(elements), len(normalized), json.dumps(rejected, sort_keys=True),
+    )
+    return normalized, True
 
 
 def _offer_start_value(game: dict[str, Any]) -> Any:
