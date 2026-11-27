@@ -1320,45 +1320,30 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             log.warning("itch.io verification failed for %s after retries: %s", url, last_error)
             continue
 
-        sale = data.get("sale")
-        if not isinstance(sale, dict):
-            continue
-        try:
-            sale_rate = float(sale.get("rate"))
-        except (TypeError, ValueError):
-            continue
-        if sale_rate != 100:
-            continue
-
-        # Verify the actual live payable value. itch.io exposes monetary values
-        # in cents in /data.json; old handling parsed e.g. 80 cents as $80 and
-        # also treated browser-playable HTML packages as downloadable games.
-        current_raw = data.get("price")
-        original_raw = data.get("original_price")
-        current_price = _parse_price_display(current_raw)
-        original_price = _parse_price_display(original_raw)
-        money_scale = str(data.get("price_currency") or data.get("currency") or "").strip().upper()
-        if isinstance(current_raw, (int, float)) and money_scale not in {"USD", "EUR", "GBP", "INR", "CAD", "AUD"}:
-            current_price /= 100
-        if isinstance(original_raw, (int, float)) and money_scale not in {"USD", "EUR", "GBP", "INR", "CAD", "AUD"}:
-            original_price /= 100
-
-        end_value = sale.get("end_date")
-        end_at = _parse_offer_datetime(end_value)
-        if current_price != 0 or original_price <= 0:
+        price_ok, price_reason, current_price, original_price = _itch_offer_price_check(data)
+        if not price_ok:
             log.info(
-                "itch.io skipped %s: live payable price is not exactly zero (price=%r, original=%r, sale_rate=%r)",
-                data.get("title") or title_hint, current_raw, original_raw, sale.get("rate"),
+                "itch.io skipped %s: %s (price=%r, original=%r, sale=%r)",
+                data.get("title") or title_hint,
+                price_reason,
+                data.get("price"),
+                data.get("original_price"),
+                (data.get("sale") or {}).get("rate") if isinstance(data.get("sale"), dict) else None,
             )
             continue
+
+        end_value = (data.get("sale") or {}).get("end_date")
+        end_at = _parse_offer_datetime(end_value)
         if end_at is None or end_at <= now:
-            log.info("itch.io skipped %s: sale expiry missing/expired (%r)", data.get("title") or title_hint, end_value)
+            log.info(
+                "itch.io skipped %s: sale expiry missing/expired (%r)",
+                data.get("title") or title_hint, end_value,
+            )
             continue
 
-        builds = _itch_downloadable_builds(data)
-        if not builds:
+        if not _itch_has_downloadable_build(data):
             log.info(
-                "itch.io skipped %s: no downloadable build found (HTML/browser-only or unsupported package schema)",
+                "itch.io skipped %s: HTML5/browser-only or no verified downloadable native build",
                 data.get("title") or title_hint,
             )
             continue
