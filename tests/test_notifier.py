@@ -42,6 +42,12 @@ class ItchEligibilityTests(unittest.TestCase):
         # 90% off is never a free giveaway, even if the page is listed on-sale.
         self.assertNotEqual(90.0, 100.0)
 
+    def test_browser_game_is_rejected_even_when_sale_metadata_is_100_percent(self):
+        # The actual feed record has no native downloads for HTML5-only games.
+        self.assertFalse(notifier._itch_has_downloadable_build({
+            "downloads": [{"type": "html", "filename": "index.html"}],
+        }))
+
 
 class EpicMobileTests(unittest.TestCase):
     def setUp(self):
