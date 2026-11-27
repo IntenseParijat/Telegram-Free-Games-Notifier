@@ -42,6 +42,14 @@ class ItchEligibilityTests(unittest.TestCase):
         # 90% off is never a free giveaway, even if the page is listed on-sale.
         self.assertNotEqual(90.0, 100.0)
 
+    def test_itch_sale_candidate_requires_downloadable_zero_price_game(self):
+        self.assertTrue(notifier._itch_has_downloadable_build({
+            "downloads": [{"type": "default", "filename": "game.zip"}],
+        }))
+        self.assertFalse(notifier._itch_has_downloadable_build({
+            "downloads": [{"type": "html", "filename": "index.html"}],
+        }))
+
     def test_browser_game_is_rejected_even_when_sale_metadata_is_100_percent(self):
         # The actual feed record has no native downloads for HTML5-only games.
         self.assertFalse(notifier._itch_has_downloadable_build({
@@ -67,6 +75,17 @@ class EpicMobileTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result[0], 0)
         self.assertEqual(result[2], "2026-12-03T16:00:00Z")
+
+    def test_direct_product_lookup_falls_back_without_raising(self):
+        class Response:
+            def raise_for_status(self):
+                raise notifier.requests.HTTPError("not found")
+        class Session:
+            def get(self, *args, **kwargs):
+                return Response()
+        from unittest.mock import patch
+        with patch.object(notifier, "_fetch_epic_mobile_catalog_product", return_value=None):
+            self.assertIsNone(notifier.fetch_epic_mobile_product(Session(), "example", "android"))
 
     def test_paid_claim_is_rejected(self):
         purchases = [{
