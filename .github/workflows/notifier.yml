@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "notifier.py"
+      - "README.md"
       - "tests/**"
       - "config.py"
       - "requirements.txt"
