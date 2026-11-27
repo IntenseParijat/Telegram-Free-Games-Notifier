@@ -604,17 +604,35 @@ def _mobile_price_amount(value: Any) -> float:
     # Epic storefront payloads normally express prices as cents.
     return amount / 100 if amount > 100 else amount
 
-
 def _parse_price_display(value: Any) -> float:
-    """Parse currency display values without truncating thousands separators."""
-    if value is None:
+    """Parse a scalar currency/number without silently treating invalid values as zero."""
+    if value is None or isinstance(value, bool):
         return 0.0
-    raw = re.sub(r"[^0-9,.]", "", str(value).strip())
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, dict):
+        # Common store schemas wrap prices in an amount/decimal/value object.
+        for key in ("amount", "decimalPrice", "value", "formatted"):
+            if key in value:
+                parsed = _parse_price_display(value[key])
+                if parsed != 0:
+                    return parsed
+        return 0.0
+
+    raw = str(value).strip()
     if not raw:
         return 0.0
-
+    # Reject non-price labels instead of extracting an accidental "0" from
+    # phrases such as "Free in browser" or "name: 0.80".
+    raw = raw.replace("\\u00a0", " ").replace("−", "-")
+    raw = re.sub(r"(?i)^(?:usd|eur|gbp|inr|cad|aud)\\s*", "", raw)
+    raw = re.sub(r"(?i)\\s*(?:usd|eur|gbp|inr|cad|aud)$", "", raw)
+    raw = raw.replace("$", "").replace("€", "").replace("£", "").replace("₹", "")
+    raw = raw.strip()
+    if not re.fullmatch(r"-?\\d[\\d., ]*", raw):
+        return 0.0
+    raw = raw.replace(" ", "")
     if "," in raw and "." in raw:
-        # The last separator is the decimal mark; the other is a group mark.
         if raw.rfind(",") > raw.rfind("."):
             raw = raw.replace(".", "").replace(",", ".")
         else:
@@ -625,12 +643,38 @@ def _parse_price_display(value: Any) -> float:
             raw = raw.replace(",", ".")
         else:
             raw = raw.replace(",", "")
-
     try:
         return float(raw)
     except ValueError:
         return 0.0
 
+
+def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return downloadable builds; HTML5/browser-only games are not giveaways."""
+    downloads = data.get("downloads") or data.get("download") or []
+    if isinstance(downloads, dict):
+        downloads = downloads.get("files") or downloads.get("downloads") or []
+    if not isinstance(downloads, list):
+        return []
+    usable: list[dict[str, Any]] = []
+    for entry in downloads:
+        if not isinstance(entry, dict):
+            continue
+        filename = str(
+            entry.get("filename") or entry.get("name") or entry.get("file_name") or ""
+        ).strip()
+        url = str(entry.get("url") or entry.get("download_url") or "").strip()
+        # The itch.io /data.json endpoint includes HTML5/browser packages as
+        # entries with type=html; do not confuse these with downloadable builds.
+        entry_type = _normalised_text(entry.get("type"))
+        if entry_type in {"html", "html5", "browser"}:
+            continue
+        if not filename and not url:
+            continue
+        usable.append(entry)
+    # Some itch.io responses contain no downloads array and expose only the
+    # package/file list. A non-empty build array is required for safety.
+    return usable
 
 
 def fetch_epic_mobile_platform(
