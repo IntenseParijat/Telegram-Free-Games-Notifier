@@ -120,6 +120,12 @@ The notifier writes a key only after Telegram confirms that the message was sent
 
 Do not delete or replace `data/seen_games.json` unless you intentionally want to reset duplicate tracking.
 
+## Current offer eligibility examples
+
+The notifier distinguishes Epic PC from Epic mobile by platform, not just by storefront brand. For example, Bread & Fred is a Windows PC promotion and is checked through Epic's official PC promotions feed; A Tiny Sticker Tale is an Android promotion and is checked through the Epic mobile Claim feed.
+
+For itch.io, a title is not eligible merely because a card appears on the on-sale page or an API record says 100%. The live price must be explicitly present and exactly zero, the sale rate must be 100%, the normal price must be positive, the sale must still be active, and a downloadable native build must be available. HTML5-only browser games and any paid amount (including a 90%-off $0.80 price) are excluded.
+
 ## Epic Games Store mobile giveaways
 
 Epic's mobile giveaways are not part of the regular PC free-games promotions feed. The notifier checks Epic's separate Android and iOS discovery API and also checks GamerPower's `type=game` giveaways filtered independently for Android and iOS.
