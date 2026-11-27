@@ -51,7 +51,7 @@ jobs:
 
       - name: Run notifier
         id: notifier
-        if: github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true'
+        if: github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true' || contains(github.event.head_commit.message, '[deliver-games]')
         env:
           FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
           FREEGAMERADAR_API_LIMIT: ${{ vars.FREEGAMERADAR_API_LIMIT }}
@@ -62,7 +62,7 @@ jobs:
         run: python notifier.py
 
       - name: Commit duplicate-tracking state
-        if: always() && (github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true')
+        if: always() && (github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true' || contains(github.event.head_commit.message, '[deliver-games]'))
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -107,7 +107,7 @@ jobs:
           {
             echo "## Free Game Notifier"
             echo
-            echo "- Python syntax validation completed before notifier execution."
+            echo "- Python syntax validation and offline regression suite completed before notifier execution."
             echo "- Job status before summary: ${{ job.status }}"
             echo "- Duplicate state is committed when changed."
             echo
