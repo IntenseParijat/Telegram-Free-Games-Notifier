@@ -995,8 +995,9 @@ def _fetch_itch_sale_page(session: requests.Session, page: int) -> tuple[list[di
 
 
 def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]], bool]:
-    """Discover current itch.io sales; prioritize likely free-to-keep sale candidates."""
+    """Discover free-to-keep itch.io offers, rejecting browser-only and paid sales."""
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     games: list[dict[str, Any]] = []
     seen_pages: set[tuple[str, ...]] = set()
@@ -1031,23 +1032,24 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             scan_complete = True
             break
 
-    # Target a title explicitly mentioned by the user first, then candidates
-    # whose on-sale card contains free/100%-off/claim language, then newest-first remainder.
     requested_titles = ("night maniac 3", "the origin of steven", "night maniac")
     candidate_list = list(candidates_by_url.values())
+
     def candidate_priority(candidate: dict[str, Any]) -> tuple[int, str]:
         title = _normalised_text(candidate.get("title_hint"))
         if any(token in title for token in requested_titles):
             return (0, title)
         return (1, title)
-    candidate_list.sort(key=candidate_priority)
 
+    candidate_list.sort(key=candidate_priority)
     verified = 0
+
     for candidate in candidate_list:
         if verified >= max_game_verifications:
             log.warning("itch.io verification reached %s-request cap; scan is partial", max_game_verifications)
             scan_complete = False
             break
+
         url = candidate["page_url"]
         data = None
         last_error: Exception | None = None
@@ -1074,11 +1076,14 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
                 last_error = exc
                 if attempt < 3:
                     time.sleep(min(2 ** attempt, 15))
+
         verified += 1
         time.sleep(1.0)
+        title_hint = candidate.get("title_hint") or url
         if data is None:
             log.warning("itch.io verification failed for %s after retries: %s", url, last_error)
             continue
+
         sale = data.get("sale")
         if not isinstance(sale, dict):
             continue
@@ -1088,24 +1093,43 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             continue
         if sale_rate != 100:
             continue
-        current_price = _parse_price_display(data.get("price"))
-        original_price = _parse_price_display(data.get("original_price"))
+
+        # Verify the actual live payable value. itch.io exposes monetary values
+        # in cents in /data.json; old handling parsed e.g. 80 cents as $80 and
+        # also treated browser-playable HTML packages as downloadable games.
+        current_raw = data.get("price")
+        original_raw = data.get("original_price")
+        current_price = _parse_price_display(current_raw)
+        original_price = _parse_price_display(original_raw)
+        money_scale = str(data.get("price_currency") or data.get("currency") or "").strip().upper()
+        if isinstance(current_raw, (int, float)) and money_scale not in {"USD", "EUR", "GBP", "INR", "CAD", "AUD"}:
+            current_price /= 100
+        if isinstance(original_raw, (int, float)) and money_scale not in {"USD", "EUR", "GBP", "INR", "CAD", "AUD"}:
+            original_price /= 100
+
         end_value = sale.get("end_date")
         end_at = _parse_offer_datetime(end_value)
         if current_price != 0 or original_price <= 0:
             log.info(
-                "itch.io skipped %s: not verifiably free-to-keep (price=%r, original=%r, rate=%r)",
-                data.get("title") or candidate["title_hint"],
-                data.get("price"), data.get("original_price"), sale.get("rate"),
+                "itch.io skipped %s: live payable price is not exactly zero (price=%r, original=%r, sale_rate=%r)",
+                data.get("title") or title_hint, current_raw, original_raw, sale.get("rate"),
             )
             continue
         if end_at is None or end_at <= now:
-            log.info("itch.io skipped %s: sale expiry missing/expired (%r)", data.get("title") or candidate["title_hint"], end_value)
+            log.info("itch.io skipped %s: sale expiry missing/expired (%r)", data.get("title") or title_hint, end_value)
             continue
-        title = str(data.get("title") or candidate["title_hint"]).strip()
-        game_id = str(data.get("id") or candidate["itch_id"] or _normalised_text(title))
+
+        builds = _itch_downloadable_builds(data)
+        if not builds:
+            log.info(
+                "itch.io skipped %s: no downloadable build found (HTML/browser-only or unsupported package schema)",
+                data.get("title") or title_hint,
+            )
+            continue
+
+        title = str(data.get("title") or title_hint).strip()
+        game_id = str(data.get("id") or candidate.get("itch_id") or _normalised_text(title))
         cover = valid_http_url(data.get("cover_image")) or candidate.get("image_url")
-        start_value = sale.get("start_date")
         games.append({
             "title": title,
             "description": str(data.get("short_text") or data.get("description") or ""),
@@ -1116,18 +1140,24 @@ def fetch_itchio_games(session: requests.Session) -> tuple[list[dict[str, Any]],
             "original_price": original_price,
             "final_price": 0,
             "discount_price": 0,
-            "start_date": start_value,
+            "start_date": sale.get("start_date"),
             "end_date": end_value,
             "game_url": url,
             "image_url": cover,
             "type": "BASE_GAME",
             "offer_type": "BASE_GAME",
-            "source": "itch.io active 100% sale",
+            "source": "itch.io active 100% downloadable sale",
             "source_url": "https://itch.io/games/newest/on-sale",
         })
-        log.info("itch.io qualified %s: original=%s, starts=%s, ends=%s", title, original_price, start_value, end_value)
+        log.info(
+            "itch.io qualified %s: original=%s, live=%s, builds=%s, ends=%s",
+            title, original_price, current_price, len(builds), end_value,
+        )
 
-    log.info("itch.io active-sales scan: %s qualifying offer(s), verified %s game pages, complete=%s", len(games), verified, scan_complete)
+    log.info(
+        "itch.io active-sales scan: %s downloadable free-to-keep offer(s), verified %s game pages, complete=%s",
+        len(games), verified, scan_complete,
+    )
     return games, scan_complete
 
 
