@@ -1,6 +1,6 @@
 # Telegram Free Games Notifier
 
-Checks FreeGameRadar's documented Epic, Steam, PlayStation and Xbox feeds independently and also checks Epic's separate Android/iOS mobile giveaway API. It merges the results and posts eligible offers to a Telegram channel using your Telegram account through Telethon.
+Checks Epic's official PC promotions API, Epic's Android/iOS mobile storefront, FreeGameRadar for Steam/PlayStation/Xbox discovery, GamerPower mobile giveaways, and verified downloadable itch.io sales. It posts only verified, active, free-to-keep full games to Telegram using Telethon.
 
 ## Setup
 
@@ -126,11 +126,11 @@ Epic's mobile giveaways are not part of the regular PC free-games promotions fee
 
 Epic mobile records must contain a currently active, zero-price `Claim` purchase entry, a positive original price, and a valid end time. The expiry is read from `discountEndDate` or the next purchase-state transition. Price strings such as `$7.99` are parsed without requiring a separate paid purchase entry. The notifier logs the number of sections, offers, and the exact reason an offer is skipped.
 
-GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios`, `type=game`, and `sort-by=date`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The claim URL intentionally uses GamerPower's `open_giveaway_url` redirect, providing the active hyperlink back to GamerPower required by its API terms. The primary FreeGameRadar API remains the source for Epic PC, Steam, PlayStation, and Xbox offers.
+GamerPower is used as an independent fallback. It is queried with `platform=android` / `platform=ios`, `type=game`, and `sort-by=date`; DLC, loot, and beta offers are not accepted. It requires a future `end_date`, a positive `worth`, and a valid claim URL. The claim URL intentionally uses GamerPower's `open_giveaway_url` redirect, providing the active hyperlink back to GamerPower required by its API terms. The Epic PC promotions API is authoritative for Epic PC offers. FreeGameRadar is used for Steam, PlayStation and Xbox discovery only; Epic listings from aggregators are rejected unless independently confirmed by Epic.
 
 ## itch.io active giveaways
 
-The notifier also checks itch.io's `/games/newest/on-sale?format=json` feed, independently of FreeGameRadar. It verifies each candidate through that game's official `/data.json` response and only accepts a 100% sale where the current price is zero, the original retail price is positive, and the sale has a future expiry. The feed commonly omits `sale.start_date`; inclusion in the current on-sale feed plus the official 100% sale rate and future expiry are used as the active-offer signal.
+The notifier also checks itch.io's `/games/newest/on-sale?format=json` feed, independently of FreeGameRadar. It verifies each candidate through that game's official `/data.json` response and only accepts a 100% sale where the current payable price is exactly zero, the original retail price is positive, the sale has a future expiry, and at least one downloadable native build is available. HTML5/browser-only games are excluded. The feed commonly omits `sale.start_date`; inclusion in the current on-sale feed plus the official 100% sale rate and future expiry are used as the active-offer signal.
 
 The scan prioritizes titles explicitly requested for checking (currently the Night Maniac series), then verifies recent candidates. It uses a bounded number of game-detail requests and a delay between requests to reduce the chance of itch.io HTTP 429 rate limiting. If the cap is reached, the feed is marked partial and the next scheduled run can continue discovering newer candidates. Game IDs are stored in the same duplicate-state file after successful Telegram delivery.
 
@@ -138,7 +138,7 @@ All posted titles are normalized to the base game name. Provider labels such as 
 
 ## API pagination and recovery
 
-FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pro users can set the GitHub Actions repository variable `FREEGAMERADAR_API_LIMIT=200`; it is not assumed automatically because the API key does not reveal its tier to the notifier.
+FreeGameRadar documents `page` and `limit` for `/developer/free`, with a maximum of 25 records per anonymous request, 100 with a Standard key, and 200 on Pro. Its Epic feed is not used as proof of an active Epic giveaway. This project requests 100 when `FREEGAMERADAR_API_KEY` is configured and 25 when it is not. Pro users can set the GitHub Actions repository variable `FREEGAMERADAR_API_LIMIT=200`; it is not assumed automatically because the API key does not reveal its tier to the notifier.
 
 The notifier requests `page=1`, then `page=2`, `page=3`, and so on, using the maximum configured `limit` on every request. It does not use an undocumented offset or cursor. Short pages are not assumed to be terminal; the scan continues until the API returns an empty page or provides authoritative pagination metadata. Requests use no-cache headers and a cache-busting query value because prior runs received the first page again when requesting page 2.
 
@@ -162,7 +162,10 @@ Set the same environment variables used by the workflow before running locally.
 
 ## Runtime behaviour
 
-- Fetches the paginated FreeGameRadar active-free-giveaways endpoint (`/developer/free`, with documented `page` and `limit` parameters).
+- Fetches Epic PC promotions from Epic's official `freeGamesPromotions` endpoint and verifies the active zero-price window.
+- Fetches Epic Android/iOS active Claim states from its mobile storefront API, with direct product fallback for known mobile SKUs.
+- Uses FreeGameRadar for Steam, PlayStation and Xbox discovery; unverified Epic aggregator rows are rejected.
+- Verifies itch.io 100%-off sales against the live amount and a downloadable native build; browser-only HTML5 pages are excluded.
 - Retries transient API failures and handles Telegram flood waits.
 - Posts each newly discovered eligible time-limited giveaway once, using the API image as a compressed Telegram photo (never as a document).
 - Marks a listing as seen only after Telegram confirms its message was sent.
