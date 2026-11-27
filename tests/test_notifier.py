@@ -54,6 +54,22 @@ class ItchEligibilityTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "missing_or_invalid_live_price")
 
+    def test_itch_nonzero_price_is_rejected_even_if_sale_rate_claims_100(self):
+        ok, reason, current, _ = notifier._itch_offer_price_check({
+            "price": "$0.80",
+            "original_price": "$8.00",
+            "sale": {"rate": 100},
+        })
+        self.assertFalse(ok)
+        self.assertEqual(reason, "live_price_not_zero")
+        self.assertEqual(current, 0.80)
+
+    def test_html5_only_platform_is_rejected_even_if_archive_is_listed(self):
+        self.assertFalse(notifier._itch_has_downloadable_build({
+            "platforms": ["HTML5"],
+            "downloads": [{"type": "default", "filename": "game.zip"}],
+        }))
+
     def test_itch_zero_price_requires_explicit_current_price_and_msrp(self):
         ok, reason, current, original = notifier._itch_offer_price_check({
             "price": "$0.00",
