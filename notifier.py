@@ -611,7 +611,6 @@ def _parse_price_display(value: Any) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, dict):
-        # Common store schemas wrap prices in an amount/decimal/value object.
         for key in ("amount", "decimalPrice", "value", "formatted"):
             if key in value:
                 parsed = _parse_price_display(value[key])
@@ -622,14 +621,11 @@ def _parse_price_display(value: Any) -> float:
     raw = str(value).strip()
     if not raw:
         return 0.0
-    # Reject non-price labels instead of extracting an accidental "0" from
-    # phrases such as "Free in browser" or "name: 0.80".
-    raw = raw.replace("\\u00a0", " ").replace("−", "-")
-    raw = re.sub(r"(?i)^(?:usd|eur|gbp|inr|cad|aud)\\s*", "", raw)
-    raw = re.sub(r"(?i)\\s*(?:usd|eur|gbp|inr|cad|aud)$", "", raw)
-    raw = raw.replace("$", "").replace("€", "").replace("£", "").replace("₹", "")
-    raw = raw.strip()
-    if not re.fullmatch(r"-?\\d[\\d., ]*", raw):
+    raw = raw.replace("\u00a0", " ").replace("−", "-")
+    raw = re.sub(r"(?i)^(?:usd|eur|gbp|inr|cad|aud)\s*", "", raw)
+    raw = re.sub(r"(?i)\s*(?:usd|eur|gbp|inr|cad|aud)$", "", raw)
+    raw = raw.replace("$", "").replace("€", "").replace("£", "").replace("₹", "").strip()
+    if not re.fullmatch(r"-?\d[\d., ]*", raw):
         return 0.0
     raw = raw.replace(" ", "")
     if "," in raw and "." in raw:
@@ -639,14 +635,12 @@ def _parse_price_display(value: Any) -> float:
             raw = raw.replace(",", "")
     elif "," in raw:
         tail = raw.rsplit(",", 1)[-1]
-        if len(tail) in (1, 2):
-            raw = raw.replace(",", ".")
-        else:
-            raw = raw.replace(",", "")
+        raw = raw.replace(",", ".") if len(tail) in (1, 2) else raw.replace(",", "")
     try:
         return float(raw)
     except ValueError:
         return 0.0
+
 
 
 def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
