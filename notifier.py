@@ -765,22 +765,65 @@ def fetch_epic_mobile_product(
         "Cache-Control": "no-cache",
         "User-Agent": "UEGameRequest/1.0 epicgames",
     }
-    response = session.get(
-        EPIC_MOBILE_PRODUCT_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT
-    )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        response = session.get(
+            EPIC_MOBILE_PRODUCT_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        log.debug("Epic mobile direct product endpoint unavailable (%s); try catalog fallback", exc)
+        return _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
+    except ValueError:
+        log.debug("Epic mobile direct product endpoint returned invalid JSON; try catalog fallback")
+        return _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
+
     if not isinstance(payload, dict):
-        return None
-    # Keep traversal defensive: Epic has used both {data:{...}} and
-    # {data:[...]}/product wrappers in this API family.
+        return _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
     data = payload.get("data")
     if isinstance(data, dict):
-        return data.get("product") if isinstance(data.get("product"), dict) else data
+        product = data.get("product") if isinstance(data.get("product"), dict) else data
+        return product if product else _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
     if isinstance(data, list):
-        return next((entry for entry in data if isinstance(entry, dict)), None)
+        product = next((entry for entry in data if isinstance(entry, dict)), None)
+        return product or _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
     product = payload.get("product")
-    return product if isinstance(product, dict) else None
+    return product if isinstance(product, dict) else _fetch_epic_mobile_catalog_product(session, slug, platform, params, headers)
+
+
+def _fetch_epic_mobile_catalog_product(
+    session: requests.Session,
+    slug: str,
+    platform: str,
+    base_params: dict[str, Any],
+    headers: dict[str, str],
+) -> dict[str, Any] | None:
+    """Resolve mobile SKU metadata through Epic's catalog item API."""
+    url = "https://catalog-public-service-prod06.ol.epicgames.com/catalog/api/shared/namespace/{namespace}/offers/{offer_id}".format(
+        namespace="egstore", offer_id=slug
+    )
+    params = {
+        "country": base_params["country"],
+        "locale": base_params["locale"],
+        "platform": platform,
+    }
+    try:
+        response = session.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        log.debug("Epic mobile catalog fallback unavailable for %s (%s)", slug, exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    # Return an explicit product wrapper where supplied; otherwise allow the
+    # caller to inspect the purchase/content fields on the catalog item itself.
+    for key in ("product", "item", "content"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    return payload
+
 
 
 def fetch_epic_mobile_platform(
