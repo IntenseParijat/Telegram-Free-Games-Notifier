@@ -128,6 +128,50 @@ class EpicMobileTests(unittest.TestCase):
         }
         self.assertEqual(notifier.eligibility_rejection_reason(game, now=self.now), "eligible")
 
+    def test_epic_mobile_discovery_uses_accepted_page_size_and_finds_a_tiny_sticker_tale(self):
+        class Response:
+            content = b"mock epic mobile response"
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {
+                    "data": [{
+                        "type": "freeGame",
+                        "offers": [{
+                            "offerId": "tiny-offer",
+                            "content": {
+                                "title": "A Tiny Sticker Tale",
+                                "catalogItemId": "tiny-catalog-id",
+                                "mapping": {"slug": "a-tiny-sticker-tale-android-7c58b7"},
+                                "purchase": [{
+                                    "purchaseType": "Claim",
+                                    "price": {"decimalPrice": 0},
+                                    "purchaseStateEffectiveDate": "2026-11-26T16:00:00Z",
+                                    "discount": {
+                                        "discountEndDate": "2026-12-03T16:00:00Z",
+                                        "originalPriceDisplay": "₹139.00",
+                                    },
+                                }],
+                            },
+                        }],
+                    }],
+                }
+
+        class Session:
+            params = None
+            def get(self, url, params=None, **kwargs):
+                self.params = params
+                return Response()
+
+        session = Session()
+        games = notifier.fetch_epic_mobile_platform(session, "android")
+        self.assertEqual(session.params["count"], 10)
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["title"], "A Tiny Sticker Tale")
+        self.assertEqual(games[0]["platform"], "Epic (Android)")
+        self.assertEqual(games[0]["source"], "Epic mobile storefront")
+        self.assertEqual(games[0]["final_price"], 0)
+
     def test_active_zero_price_claim_is_accepted(self):
         purchases = [{
             "purchaseType": "Claim",
