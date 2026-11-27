@@ -700,6 +700,49 @@ def _itch_has_downloadable_build(data: dict[str, Any]) -> bool:
     return False
 
 
+def _epic_mobile_active_claim(
+    purchases: Any,
+    now=None,
+) -> tuple[int, dict[str, Any], Any] | None:
+    """Pick the active zero-price Claim state and its explicit/derived expiry."""
+    from datetime import datetime, timezone
+
+    if not isinstance(purchases, list):
+        return None
+    now_at = now or datetime.now(timezone.utc)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for index, purchase in enumerate(purchases):
+        if not isinstance(purchase, dict) or purchase.get("purchaseType") != "Claim":
+            continue
+        price = purchase.get("price") or {}
+        raw_price = price.get("decimalPrice") if isinstance(price, dict) else None
+        try:
+            is_zero = float(raw_price) == 0
+        except (TypeError, ValueError):
+            # Do not infer zero from absent/unparseable price data.
+            is_zero = False
+        effective = _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate"))
+        if is_zero and effective is not None and effective <= now_at:
+            candidates.append((index, purchase))
+
+    for index, claim in reversed(candidates):
+        discount = claim.get("discount") or {}
+        end_value = discount.get("discountEndDate") if isinstance(discount, dict) else None
+        if not end_value:
+            following = [
+                _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate"))
+                for purchase in purchases[index + 1:]
+                if isinstance(purchase, dict)
+            ]
+            future = [date for date in following if date is not None and date > now_at]
+            if future:
+                end_value = min(future).isoformat().replace("+00:00", "Z")
+        end_at = _parse_offer_datetime(end_value, date_only_end=True)
+        if end_at is not None and end_at > now_at:
+            return index, claim, end_value
+    return None
+
+
 def fetch_epic_mobile_platform(
     session: requests.Session,
     platform: str,
@@ -775,20 +818,8 @@ def fetch_epic_mobile_platform(
                 log.info("Epic %s mobile skipped %s: purchase field is not a list", platform, title)
                 continue
 
-            candidates: list[tuple[int, dict[str, Any]]] = []
-            for index, purchase in enumerate(purchases):
-                if not isinstance(purchase, dict) or purchase.get("purchaseType") != "Claim":
-                    continue
-                price_data = purchase.get("price") or {}
-                try:
-                    claim_price = float(price_data.get("decimalPrice"))
-                except (TypeError, ValueError):
-                    continue
-                effective_at = _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate"))
-                if claim_price == 0 and effective_at is not None and effective_at <= now:
-                    candidates.append((index, purchase))
-
-            if not candidates:
+            active_claim = _epic_mobile_active_claim(purchases, now=now)
+            if active_claim is None:
                 upcoming = sum(
                     1 for purchase in purchases
                     if isinstance(purchase, dict)
@@ -797,29 +828,15 @@ def fetch_epic_mobile_platform(
                     and _parse_offer_datetime(purchase.get("purchaseStateEffectiveDate")) > now
                 )
                 log.info(
-                    "Epic %s mobile skipped %s: no currently active zero-price Claim (purchase_entries=%s, future_claims=%s)",
+                    "Epic %s mobile skipped %s: no active zero-price Claim with a valid future expiry (purchase_entries=%s, future_claims=%s)",
                     platform, title, len(purchases), upcoming,
                 )
                 continue
 
-            claim_index, claim = candidates[-1]
+            claim_index, claim, end_value = active_claim
             discount = claim.get("discount") or {}
             start_value = claim.get("purchaseStateEffectiveDate")
-            end_value = discount.get("discountEndDate")
-            if not end_value:
-                next_state = [
-                    _parse_offer_datetime(p.get("purchaseStateEffectiveDate"))
-                    for p in purchases[claim_index + 1:]
-                    if isinstance(p, dict)
-                ]
-                next_dates = [d for d in next_state if d is not None and d > now]
-                if next_dates:
-                    end_value = min(next_dates).isoformat().replace("+00:00", "Z")
             end_at = _parse_offer_datetime(end_value, date_only_end=True)
-            if end_at is None or end_at <= now:
-                log.info("Epic %s mobile skipped %s: missing or expired Claim end time", platform, title)
-                continue
-
             # Epic returns the normal retail value in the active Claim's
             # discount.originalPriceDisplay. This is the canonical field;
             # do not infer a retail price from another future/expired state.
