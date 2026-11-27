@@ -2016,12 +2016,13 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     if not isinstance(game, dict):
         return "malformed_record"
 
-    # FreeGameRadar is a discovery source, not an authority for Epic PC offers.
-    # Prevent any third-party Epic listing from becoming eligible unless it
-    # was independently verified by Epic's own active-promotions response.
+    # FreeGameRadar is not authoritative for Epic PC giveaways. Epic mobile is
+    # classified separately by _platform_family and is checked against Claim states.
     source = _normalised_text(game.get("source"))
     platform = _platform_family(game.get("platform"))
-    if platform == "epic" and "epic games store official pc promotions" not in source:
+    if platform == "epic" and not (
+        "epic games store official pc promotions" in source
+    ):
         return "epic_offer_not_verified_by_official_store"
 
     is_free_value = game.get("is_free")
@@ -2032,6 +2033,12 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     )
     if not is_free:
         return "is_free_false_or_missing"
+
+    from datetime import datetime, timezone
+    now_at = now or datetime.now(timezone.utc)
+    if now_at.tzinfo is None:
+        now_at = now_at.replace(tzinfo=timezone.utc)
+    now_utc = now_at.astimezone(timezone.utc)
 
     end_value = (
         game.get("end_date") or game.get("endDate")
@@ -2046,28 +2053,24 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
         or game.get("ends_at")
     )
     end_at = _parse_offer_datetime(end_value, date_only_end=True)
-    from datetime import datetime, timezone
-    now_at = now or datetime.now(timezone.utc)
-    if now_at.tzinfo is None:
-        now_at = now_at.replace(tzinfo=timezone.utc)
     if end_at is None:
         return "missing_or_unparseable_expiry"
-    if end_at <= now_at.astimezone(timezone.utc):
+    if end_at <= now_utc:
         return "offer_expired"
 
-    # An explicit final/discount price must be zero. Missing price metadata is
-    # tolerated for non-Epic sources that historically provide only worth.
-    final_value = (
-        game.get("final_price") if game.get("final_price") not in (None, "")
-        else game.get("finalPrice") if game.get("finalPrice") not in (None, "")
-        else game.get("discount_price") if game.get("discount_price") not in (None, "")
-        else game.get("discountPrice")
+    # Do not post upcoming giveaways merely because an aggregator sets is_free
+    # before its promotion start. created_at is deliberately not used as a start.
+    start_value = (
+        game.get("start_date") or game.get("startDate")
+        or game.get("offer_start_date") or game.get("offerStartDate")
+        or game.get("promotion_start_date") or game.get("promotionStartDate")
+        or game.get("free_from") or game.get("freeFrom")
+        or game.get("offer_started_at") or game.get("starts_at")
     )
-    if final_value not in (None, "") and _parse_price_display(final_value) != 0:
-        return "final_price_not_zero"
+    start_at = _parse_offer_datetime(start_value)
+    if start_at is not None and start_at > now_utc:
+        return "offer_not_started"
 
-    # Check an explicitly reported payable amount before requiring an original
-    # price so the exclusion is diagnosable even when metadata is incomplete.
     final_value = (
         game.get("final_price") if game.get("final_price") not in (None, "")
         else game.get("finalPrice") if game.get("finalPrice") not in (None, "")
