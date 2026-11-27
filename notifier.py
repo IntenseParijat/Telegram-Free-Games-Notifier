@@ -690,7 +690,7 @@ def _parse_price_display(value: Any) -> float:
 
 
 def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return downloadable builds; exclude HTML5/browser-playable packages."""
+    """Return downloadable native builds; HTML5/browser packages are not downloads."""
     downloads = data.get("downloads") or data.get("download") or []
     if isinstance(downloads, dict):
         downloads = downloads.get("files") or downloads.get("downloads") or []
@@ -706,7 +706,7 @@ def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
         url = str(entry.get("url") or entry.get("download_url") or "").strip()
         if entry_type in {"html", "html5", "browser", "web", "play in browser"}:
             continue
-        if re.search(r"(?i)\\.(?:html?|wasm|zip\\.html)$", filename):
+        if re.search(r"(?i)\.(?:html?|wasm|zip\.html)$", filename):
             continue
         if not filename and not url:
             continue
@@ -715,14 +715,41 @@ def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _itch_has_downloadable_build(data: dict[str, Any]) -> bool:
-    """Inspect multiple itch.io /data.json shapes for native/downloadable builds."""
+    """Require a native platform or an identifiable downloadable file."""
+    native_platforms = {"windows", "osx", "mac", "macos", "linux", "android"}
+    browser_platforms = {"html", "html5", "browser", "web"}
+    raw_platforms = data.get("platforms")
+    reported_platforms: set[str] = set()
+    if isinstance(raw_platforms, dict):
+        reported_platforms = {
+            _normalised_text(key)
+            for key, enabled_value in raw_platforms.items()
+            if enabled_value not in (False, None, 0, "", "no")
+        }
+    elif isinstance(raw_platforms, (list, tuple, set)):
+        reported_platforms = {_normalised_text(value) for value in raw_platforms}
+    elif isinstance(raw_platforms, str):
+        reported_platforms = {_normalised_text(value) for value in re.split(r"[,;/|]", raw_platforms)}
+
+    # Also understand itch's p_windows/p_osx/p_linux/p_android/p_html flags.
+    for key in ("windows", "osx", "linux", "android", "html"):
+        flag = data.get(f"p_{key}")
+        if flag not in (False, None, 0, "", "no"):
+            reported_platforms.add(key)
+
+    if reported_platforms and not any(
+        platform in native_platforms for platform in reported_platforms
+    ):
+        if reported_platforms.intersection(browser_platforms):
+            return False
+        # A known but unsupported platform is not proof of a downloadable PC/mobile build.
+        return False
+
     builds = _itch_downloadable_builds(data)
     if builds:
         return True
 
-    # Some versions of the itch.io detail endpoint expose package keys/files
-    # rather than the older downloads list. A package must contain at least
-    # one downloadable file with a real filename and byte size.
+    # Some itch.io detail responses expose package files rather than downloads.
     for package in data.get("packages") or []:
         if not isinstance(package, dict):
             continue
@@ -735,9 +762,54 @@ def _itch_has_downloadable_build(data: dict[str, Any]) -> bool:
                 size = int(file.get("size") or 0)
             except (TypeError, ValueError):
                 size = 0
-            if filename and size > 0 and not re.search(r"(?i)\\.(?:html?|wasm)$", filename):
+            if filename and size > 0 and not re.search(r"(?i)\.(?:html?|wasm)$", filename):
                 return True
     return False
+
+
+def _parse_itch_price(value: Any) -> float | None:
+    """Parse itch.io's documented formatted price string; None means unavailable/invalid."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        # Numeric zero/non-zero can be compared without guessing minor-unit scale.
+        return float(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    # itch.io /data.json uses formatted currency strings such as "$0.60".
+    # Reject labels and unlabelled descriptive text; missing data must not
+    # silently become zero.
+    if not re.fullmatch(
+        r"(?i)\s*(?:(?:USD|EUR|GBP|INR|CAD|AUD)\s*)?(?:[$€£₹]\s*)?-?\d[\d.,]*(?:\s*(?:USD|EUR|GBP|INR|CAD|AUD))?\s*",
+        raw,
+    ):
+        return None
+    return _parse_price_display(raw)
+
+
+def _itch_offer_price_check(data: dict[str, Any]) -> tuple[bool, str, float | None, float | None]:
+    """Require a 100% sale, an explicitly reported $0 live price and positive MSRP."""
+    sale = data.get("sale")
+    if not isinstance(sale, dict):
+        return False, "not_on_sale", None, None
+    try:
+        rate = float(sale.get("rate"))
+    except (TypeError, ValueError):
+        return False, "missing_sale_rate", None, None
+    if rate != 100:
+        return False, "discount_not_100_percent", None, None
+
+    current = _parse_itch_price(data.get("price"))
+    original = _parse_itch_price(data.get("original_price"))
+    if current is None:
+        return False, "missing_or_invalid_live_price", current, original
+    if current != 0:
+        return False, "live_price_not_zero", current, original
+    if original is None or original <= 0:
+        return False, "missing_positive_original_price", current, original
+    return True, "eligible", current, original
+
 
 
 def _epic_mobile_active_claim(
