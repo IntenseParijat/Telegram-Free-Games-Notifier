@@ -1977,6 +1977,17 @@ def eligibility_rejection_reason(game: dict[str, Any], now=None) -> str:
     if final_value not in (None, "") and _parse_price_display(final_value) != 0:
         return "final_price_not_zero"
 
+    # Check an explicitly reported payable amount before requiring an original
+    # price so the exclusion is diagnosable even when metadata is incomplete.
+    final_value = (
+        game.get("final_price") if game.get("final_price") not in (None, "")
+        else game.get("finalPrice") if game.get("finalPrice") not in (None, "")
+        else game.get("discount_price") if game.get("discount_price") not in (None, "")
+        else game.get("discountPrice")
+    )
+    if final_value not in (None, "") and _parse_price_display(final_value) != 0:
+        return "final_price_not_zero"
+
     original = (
         game.get("original_price") or game.get("originalPrice")
         or game.get("regular_price") or game.get("regularPrice")
