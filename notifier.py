@@ -375,18 +375,64 @@ def _canonical_game_title(value: Any) -> str:
 
 
 def _platform_family(value: Any) -> str:
+    """Classify a storefront/platform label without collapsing Epic mobile into Epic PC."""
     text = _normalised_text(value)
-    if "epic" in text or "egs" in text:
-        return "epic"
-    if "steam" in text:
-        return "steam"
-    if "playstation" in text or "ps4" in text or "ps5" in text:
-        return "playstation"
-    if "xbox" in text:
-        return "xbox"
-    if any(term in text.split() for term in ("android", "ios")) or "mobile" in text:
+    tokens = set(text.split())
+    # Platform must take precedence over storefront brand. "Epic (Android)"
+    # is an Epic storefront offer for mobile, not an Epic PC listing.
+    if tokens.intersection({"android", "ios", "mobile"}):
         return "mobile"
+    if "steam" in tokens:
+        return "steam"
+    if "playstation" in tokens or tokens.intersection({"ps4", "ps5"}):
+        return "playstation"
+    if "xbox" in tokens:
+        return "xbox"
+    if "epic" in tokens or "egs" in tokens:
+        return "epic"
     return text
+
+
+def _is_authoritative_epic_record(game: dict[str, Any]) -> bool:
+    """Return whether an Epic row was verified by the matching official feed."""
+    source = _normalised_text(game.get("source"))
+    return (
+        "epic games store official pc promotions" in source
+        or "epic mobile storefront" in source
+    )
+
+
+def _merge_duplicate_offer(existing: dict[str, Any], incoming: dict[str, Any]) -> None:
+    """Merge duplicate providers without allowing unverified metadata to replace store truth."""
+    existing_authoritative = _is_authoritative_epic_record(existing)
+    incoming_authoritative = _is_authoritative_epic_record(incoming)
+
+    if incoming_authoritative and not existing_authoritative:
+        # Replace offer state as well as display metadata. This is critical when
+        # FreeGameRadar reports the same Epic ID first with stale/missing dates.
+        authoritative_fields = (
+            "title", "description", "image_url", "game_url", "platform",
+            "game_id", "id", "is_free", "original_price", "final_price",
+            "discount_price", "discount_percent", "currency", "start_date",
+            "end_date", "type", "offer_type", "source", "source_url",
+            "epic_offer_id",
+        )
+        for field in authoritative_fields:
+            if incoming.get(field) not in (None, ""):
+                existing[field] = incoming[field]
+        return
+
+    if existing_authoritative:
+        # An aggregator may fill blanks but cannot overwrite a verified offer.
+        for field in ("description", "image_url", "game_url"):
+            if existing.get(field) in (None, "") and incoming.get(field) not in (None, ""):
+                existing[field] = incoming[field]
+        return
+
+    # Neither row is authoritative Epic data: use non-destructive metadata fill.
+    for field in ("description", "image_url", "game_url"):
+        if existing.get(field) in (None, "") and incoming.get(field) not in (None, ""):
+            existing[field] = incoming[field]
 
 
 def _same_game_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1293,24 +1339,10 @@ def fetch_all_games(api_key: str | None) -> tuple[list[dict[str, Any]], bool]:
             key = game_key(game)
             existing = seen_global.get(key)
             if existing is not None:
-                existing["platform"] = merge_platform_labels(
-                    existing.get("platform"), game.get("platform")
-                )
-                # Prefer the official Epic storefront title/description/image/link
-                # over aggregator paraphrases for the one combined mobile post.
-                existing_is_epic = "epic mobile storefront" in _normalised_text(existing.get("source"))
-                incoming_is_epic = "epic mobile storefront" in _normalised_text(game.get("source"))
-                if incoming_is_epic and not existing_is_epic:
-                    for field in ("title", "description", "image_url", "game_url", "original_price", "source"):
-                        if game.get(field) not in (None, ""):
-                            existing[field] = game[field]
-                else:
-                    for field in ("description", "image_url", "game_url"):
-                        if existing.get(field) in (None, "") and game.get(field):
-                            existing[field] = game[field]
+                _merge_duplicate_offer(existing, game)
                 log.info(
-                    "Collapsed duplicate giveaway source into %s (incoming=%s)",
-                    key, game.get("source", "unknown"),
+                    "Collapsed duplicate giveaway source into %s (incoming=%s, retained=%s)",
+                    key, game.get("source", "unknown"), existing.get("source", "unknown"),
                 )
                 continue
             seen_global[key] = game
