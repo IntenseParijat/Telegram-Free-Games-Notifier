@@ -35,6 +35,36 @@ class ItchEligibilityTests(unittest.TestCase):
             "packages": [{"files": [{"filename": "game-linux.tar.gz", "size": 1234}]}],
         }))
 
+    def test_itch_guildmaster_style_90_percent_sale_is_rejected(self):
+        ok, reason, current, original = notifier._itch_offer_price_check({
+            "price": "$0.80",
+            "original_price": "$8.00",
+            "sale": {"rate": 90},
+        })
+        self.assertFalse(ok)
+        self.assertEqual(reason, "discount_not_100_percent")
+        self.assertEqual(current, 0.80)
+        self.assertEqual(original, 8.00)
+
+    def test_itch_missing_live_price_is_not_assumed_free(self):
+        ok, reason, _, _ = notifier._itch_offer_price_check({
+            "original_price": "$8.00",
+            "sale": {"rate": 100},
+        })
+        self.assertFalse(ok)
+        self.assertEqual(reason, "missing_or_invalid_live_price")
+
+    def test_itch_zero_price_requires_explicit_current_price_and_msrp(self):
+        ok, reason, current, original = notifier._itch_offer_price_check({
+            "price": "$0.00",
+            "original_price": "$8.00",
+            "sale": {"rate": 100},
+        })
+        self.assertTrue(ok)
+        self.assertEqual(reason, "eligible")
+        self.assertEqual(current, 0.0)
+        self.assertEqual(original, 8.0)
+
     def test_paid_price_is_not_zero(self):
         self.assertNotEqual(notifier._parse_price_display("$0.80"), 0)
 
@@ -60,6 +90,25 @@ class ItchEligibilityTests(unittest.TestCase):
 class EpicMobileTests(unittest.TestCase):
     def setUp(self):
         self.now = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+
+    def test_epic_android_platform_is_not_misclassified_as_epic_pc(self):
+        self.assertEqual(notifier._platform_family("Epic (Android)"), "mobile")
+        self.assertEqual(notifier._platform_family("Epic (iOS)"), "mobile")
+        self.assertEqual(notifier._platform_family("Epic"), "epic")
+
+    def test_verified_epic_android_offer_passes_general_eligibility(self):
+        game = {
+            "title": "A Tiny Sticker Tale",
+            "platform": "Epic (Android)",
+            "source": "Epic mobile storefront",
+            "is_free": True,
+            "original_price": "$139.00",
+            "final_price": 0,
+            "start_date": "2026-11-27T10:00:00Z",
+            "end_date": "2026-12-03T16:00:00Z",
+            "type": "BASE_GAME",
+        }
+        self.assertEqual(notifier.eligibility_rejection_reason(game, now=self.now), "eligible")
 
     def test_active_zero_price_claim_is_accepted(self):
         purchases = [{
@@ -116,6 +165,48 @@ class EpicMobileTests(unittest.TestCase):
 
 
 class EpicPcAndSourceIsolationTests(unittest.TestCase):
+    def test_upcoming_offer_is_not_eligible_until_start(self):
+        game = {
+            "title": "Upcoming giveaway",
+            "platform": "Epic",
+            "source": "Epic Games Store official PC promotions",
+            "is_free": True,
+            "original_price": "$14.99",
+            "final_price": 0,
+            "start_date": "2026-11-28T16:00:00Z",
+            "end_date": "2026-12-03T16:00:00Z",
+            "type": "BASE_GAME",
+        }
+        self.assertEqual(notifier.eligibility_rejection_reason(game), "offer_not_started")
+
+    def test_official_epic_pc_record_replaces_unverified_aggregator_state(self):
+        existing = {
+            "title": "Bread and Fred",
+            "platform": "Epic",
+            "game_id": "bread-and-fred-id",
+            "source": "FreeGameRadar",
+            "is_free": True,
+            "original_price": "$14.99",
+            "final_price": 0,
+            "end_date": "2026-12-03T16:00:00Z",
+        }
+        official = {
+            "title": "Bread & Fred",
+            "platform": "Epic",
+            "game_id": "bread-and-fred-id",
+            "source": "Epic Games Store official PC promotions",
+            "is_free": True,
+            "original_price": 14.99,
+            "final_price": 0,
+            "start_date": "2026-11-26T16:00:00Z",
+            "end_date": "2026-12-03T16:00:00Z",
+            "type": "BASE_GAME",
+        }
+        notifier._merge_duplicate_offer(existing, official)
+        self.assertEqual(existing["source"], official["source"])
+        self.assertEqual(existing["start_date"], official["start_date"])
+        self.assertEqual(notifier.eligibility_rejection_reason(existing), "eligible")
+
     def test_unverified_epic_aggregator_row_is_rejected(self):
         game = {
             "title": "Bread and Fred",
