@@ -406,6 +406,7 @@ def _merge_duplicate_offer(existing: dict[str, Any], incoming: dict[str, Any]) -
     """Merge duplicate providers without allowing unverified metadata to replace store truth."""
     existing_authoritative = _is_authoritative_epic_record(existing)
     incoming_authoritative = _is_authoritative_epic_record(incoming)
+    merged_platform = merge_platform_labels(existing.get("platform"), incoming.get("platform"))
 
     if incoming_authoritative and not existing_authoritative:
         # Replace offer state as well as display metadata. This is critical when
@@ -420,8 +421,10 @@ def _merge_duplicate_offer(existing: dict[str, Any], incoming: dict[str, Any]) -
         for field in authoritative_fields:
             if incoming.get(field) not in (None, ""):
                 existing[field] = incoming[field]
+        existing["platform"] = incoming.get("platform") or merged_platform
         return
 
+    existing["platform"] = merged_platform
     if existing_authoritative:
         # An aggregator may fill blanks but cannot overwrite a verified offer.
         for field in ("description", "image_url", "game_url"):
@@ -1007,7 +1010,8 @@ def fetch_epic_mobile_platform(
     # These fallbacks are discovered here and are still verified against the
     # live Epic purchase states before being accepted.
     fallback_slugs = {
-        "bread-and-fred-1db362",
+        # Android SKU only. Bread & Fred is a Windows PC promotion and is
+        # discovered through Epic's official PC freeGamesPromotions endpoint.
         "a-tiny-sticker-tale-android-7c58b7",
     }
     for slug in fallback_slugs:
@@ -1610,6 +1614,12 @@ def fetch_epic_pc_games(session: requests.Session) -> tuple[list[dict[str, Any]]
             None,
         )
         identifier = str(item.get("id") or item.get("productSlug") or page_slug)
+        log.info(
+            "Epic PC qualified %s: original=%s, final=%s, starts=%s, ends=%s, slug=%s",
+            title, original_amount, final_amount,
+            start_at.isoformat().replace("+00:00", "Z"),
+            end_at.isoformat().replace("+00:00", "Z"), page_slug,
+        )
         normalized.append({
             "title": title,
             "description": str(item.get("description") or ""),
