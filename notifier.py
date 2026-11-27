@@ -743,6 +743,46 @@ def _epic_mobile_active_claim(
     return None
 
 
+EPIC_MOBILE_PRODUCT_API_URL = "https://egs-platform-service.store.epicgames.com/api/v2/public/product"
+
+
+def fetch_epic_mobile_product(
+    session: requests.Session,
+    slug: str,
+    platform: str,
+) -> dict[str, Any] | None:
+    """Fetch a direct Epic mobile product record as a fallback to the homepage module."""
+    params = {
+        "country": os.getenv("EPIC_COUNTRY", "IN"),
+        "locale": os.getenv("EPIC_LOCALE", "en-IN"),
+        "platform": platform,
+        "slug": slug,
+        "store": "EGS",
+        "cb": int(time.time() * 1000),
+    }
+    headers = {
+        "Accept": "application/json",
+        "Cache-Control": "no-cache",
+        "User-Agent": "UEGameRequest/1.0 epicgames",
+    }
+    response = session.get(
+        EPIC_MOBILE_PRODUCT_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        return None
+    # Keep traversal defensive: Epic has used both {data:{...}} and
+    # {data:[...]}/product wrappers in this API family.
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return data.get("product") if isinstance(data.get("product"), dict) else data
+    if isinstance(data, list):
+        return next((entry for entry in data if isinstance(entry, dict)), None)
+    product = payload.get("product")
+    return product if isinstance(product, dict) else None
+
+
 def fetch_epic_mobile_platform(
     session: requests.Session,
     platform: str,
