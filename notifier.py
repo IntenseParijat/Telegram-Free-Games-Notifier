@@ -650,31 +650,54 @@ def _parse_price_display(value: Any) -> float:
 
 
 def _itch_downloadable_builds(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return downloadable builds; HTML5/browser-only games are not giveaways."""
+    """Return downloadable builds; exclude HTML5/browser-playable packages."""
     downloads = data.get("downloads") or data.get("download") or []
     if isinstance(downloads, dict):
         downloads = downloads.get("files") or downloads.get("downloads") or []
     if not isinstance(downloads, list):
         return []
+
     usable: list[dict[str, Any]] = []
     for entry in downloads:
         if not isinstance(entry, dict):
             continue
-        filename = str(
-            entry.get("filename") or entry.get("name") or entry.get("file_name") or ""
-        ).strip()
+        entry_type = _normalised_text(entry.get("type") or entry.get("platform") or "")
+        filename = str(entry.get("filename") or entry.get("name") or entry.get("file_name") or "").strip()
         url = str(entry.get("url") or entry.get("download_url") or "").strip()
-        # The itch.io /data.json endpoint includes HTML5/browser packages as
-        # entries with type=html; do not confuse these with downloadable builds.
-        entry_type = _normalised_text(entry.get("type"))
-        if entry_type in {"html", "html5", "browser"}:
+        if entry_type in {"html", "html5", "browser", "web", "play in browser"}:
+            continue
+        if re.search(r"(?i)\\.(?:html?|wasm|zip\\.html)$", filename):
             continue
         if not filename and not url:
             continue
         usable.append(entry)
-    # Some itch.io responses contain no downloads array and expose only the
-    # package/file list. A non-empty build array is required for safety.
     return usable
+
+
+def _itch_has_downloadable_build(data: dict[str, Any]) -> bool:
+    """Inspect multiple itch.io /data.json shapes for native/downloadable builds."""
+    builds = _itch_downloadable_builds(data)
+    if builds:
+        return True
+
+    # Some versions of the itch.io detail endpoint expose package keys/files
+    # rather than the older downloads list. A package must contain at least
+    # one downloadable file with a real filename and byte size.
+    for package in data.get("packages") or []:
+        if not isinstance(package, dict):
+            continue
+        files = package.get("files") or []
+        for file in files:
+            if not isinstance(file, dict):
+                continue
+            filename = str(file.get("filename") or file.get("name") or "").strip()
+            try:
+                size = int(file.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if filename and size > 0 and not re.search(r"(?i)\\.(?:html?|wasm)$", filename):
+                return True
+    return False
 
 
 def fetch_epic_mobile_platform(
