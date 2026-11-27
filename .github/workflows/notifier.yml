@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: free-game-notifier-main
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   notify:
@@ -51,6 +51,7 @@ jobs:
 
       - name: Run notifier
         id: notifier
+        if: github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true'
         env:
           FREEGAMERADAR_API_KEY: ${{ secrets.FREEGAMERADAR_API_KEY }}
           FREEGAMERADAR_API_LIMIT: ${{ vars.FREEGAMERADAR_API_LIMIT }}
@@ -61,7 +62,7 @@ jobs:
         run: python notifier.py
 
       - name: Commit duplicate-tracking state
-        if: always()
+        if: always() && (github.event_name != 'push' || vars.RUN_NOTIFIER_ON_PUSH == 'true')
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
