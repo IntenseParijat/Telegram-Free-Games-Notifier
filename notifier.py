@@ -950,6 +950,7 @@ def fetch_epic_mobile_platform(
 
     now = datetime.now(timezone.utc)
     params = {
+        # Keep the accepted mobile page size; count=30 returns HTTP 400.
         "count": 10,
         "country": os.getenv("EPIC_COUNTRY", "IN"),
         "locale": os.getenv("EPIC_LOCALE", "en-IN"),
