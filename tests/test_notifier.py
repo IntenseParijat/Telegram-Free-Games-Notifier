@@ -43,8 +43,10 @@ class ItchEligibilityTests(unittest.TestCase):
         })
         self.assertFalse(ok)
         self.assertEqual(reason, "discount_not_100_percent")
-        self.assertEqual(current, 0.80)
-        self.assertEqual(original, 8.00)
+        # Rate validation rejects before price parsing; the separate 100%-rate
+        # test below proves that a live $0.80 amount cannot pass either.
+        self.assertIsNone(current)
+        self.assertIsNone(original)
 
     def test_itch_missing_live_price_is_not_assumed_free(self):
         ok, reason, _, _ = notifier._itch_offer_price_check({
