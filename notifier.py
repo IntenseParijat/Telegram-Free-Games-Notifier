@@ -950,7 +950,7 @@ def fetch_epic_mobile_platform(
 
     now = datetime.now(timezone.utc)
     params = {
-        "count": 30,
+        "count": 10,
         "country": os.getenv("EPIC_COUNTRY", "IN"),
         "locale": os.getenv("EPIC_LOCALE", "en-IN"),
         "platform": platform,
